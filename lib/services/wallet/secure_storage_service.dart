@@ -48,6 +48,9 @@ class SecureStorageService {
   Future<void> setActiveWalletId(String id) =>
       _storage.write(key: _kActiveId, value: id, iOptions: _iosOptions);
 
+  Future<void> clearActiveWalletId() =>
+      _storage.delete(key: _kActiveId, iOptions: _iosOptions);
+
   Future<String?> readMnemonicForWallet(String id) =>
       _storage.read(key: _mnemonicKey(id), iOptions: _iosOptions);
 

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:web3dart/web3dart.dart';
 
+import '../config/evm_environment.dart';
 import '../models/evm_network.dart';
 import '../providers/wallet_controller.dart';
 import '../services/wallet/secure_storage_service.dart';
@@ -9,6 +11,18 @@ import '../theme/app_colors.dart';
 
 /// 将 RPC 限流、非 JSON 响应等转成可读提示（避免整段 FormatException 糊脸）。
 String _mapTransferSendError(Object e) {
+  if (e is StateError) {
+    final m = e.message;
+    if (m.contains('收款') || m.contains('钱包相同') || m.contains('向自己')) {
+      return m;
+    }
+  }
+  if (e is ArgumentError) {
+    final m = e.message?.toString() ?? '';
+    if (m.contains('address') || m.contains('hex')) {
+      return '收款地址格式无效，请使用完整的 0x 开头 42 位十六进制地址（不要填 ENS 昵称，除非已做解析）。';
+    }
+  }
   final s = e.toString();
   if (s.contains('Too many connections') ||
       s.contains('Too Many Requests') ||
@@ -20,6 +34,10 @@ String _mapTransferSendError(Object e) {
     return '链上节点返回异常（多为限流或维护），请稍后重试。';
   }
   return '发送失败: $e';
+}
+
+String _normalizeAddrField(String raw) {
+  return raw.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
 }
 
 class _TokenItem {
@@ -55,21 +73,36 @@ class _TransferScreenState extends State<TransferScreen> {
   String _gasLevel = '中';
   double _customGwei = 0.040084;
 
+  static const _transferColors = {
+    EvmNetworkId.ethereum: Color(0xFF3B82F6),
+    EvmNetworkId.base: Color(0xFF60A5FA),
+  };
+  static const _transferMarks = {
+    EvmNetworkId.ethereum: '◆',
+    EvmNetworkId.base: '◉',
+  };
+
   List<_TokenItem> _tokensFor(WalletController w) {
-    var ethBal = 0.0;
-    var baseBal = 0.0;
-    if (w.hasWallet) {
-      for (final c in w.evmCoins) {
-        if (c.chainId == 1) ethBal = c.balance;
-        if (c.chainId == 8453) baseBal = c.balance;
+    return EvmEnvironment.nativeCoins.map((cfg) {
+      var bal = 0.0;
+      final cid = EvmEnvironment.chainId(cfg.networkKey);
+      if (w.hasWallet) {
+        for (final c in w.evmCoins) {
+          if (c.chainId == cid) {
+            bal = c.balance;
+            break;
+          }
+        }
       }
-    }
-    return [
-      _TokenItem('ETH', 'Ethereum', ethBal, const Color(0xFF3B82F6), '◆',
-          EvmNetworkId.ethereum),
-      _TokenItem('ETH', 'Base', baseBal, const Color(0xFF60A5FA), '◉',
-          EvmNetworkId.base),
-    ];
+      return _TokenItem(
+        cfg.symbol,
+        cfg.networkLabel,
+        bal,
+        _transferColors[cfg.networkKey]!,
+        _transferMarks[cfg.networkKey]!,
+        cfg.networkKey,
+      );
+    }).toList();
   }
 
   _TokenItem _selectedToken(List<_TokenItem> tokens) =>
@@ -450,8 +483,26 @@ class _TransferScreenState extends State<TransferScreen> {
       );
       return;
     }
-    final sel = _selectedToken(tokens);
     final from = wallet.addressHex ?? '';
+    final toNorm = _normalizeAddrField(_address.text);
+    try {
+      final toAddr = EthereumAddress.fromHex(toNorm);
+      final fromAddr = EthereumAddress.fromHex(
+        from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from',
+      );
+      if (toAddr.hex.toLowerCase() == fromAddr.hex.toLowerCase()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('收款地址不能与当前钱包相同，请填写对方地址')),
+        );
+        return;
+      }
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址')),
+      );
+      return;
+    }
+    final sel = _selectedToken(tokens);
     final fromShort = from.length > 10
         ? '${from.substring(0, 6)}…${from.substring(from.length - 4)}'
         : from;
@@ -612,7 +663,7 @@ class _TransferScreenState extends State<TransferScreen> {
                                     try {
                                       final hash = await wallet.sendEth(
                                         network: sel.evmNetwork,
-                                        toHex: _address.text.trim(),
+                                        toHex: _normalizeAddrField(_address.text),
                                         amountEther: amountStr,
                                       );
                                       messenger.showSnackBar(

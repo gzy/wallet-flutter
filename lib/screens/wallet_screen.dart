@@ -6,6 +6,7 @@ import '../models/stored_wallet.dart';
 import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
 import 'add_wallet_screen.dart';
+import 'wallet_detail_screen.dart';
 import 'flash_screen.dart';
 import 'receive_screen.dart';
 import 'transfer_screen.dart';
@@ -44,6 +45,7 @@ class _WalletScreenState extends State<WalletScreen> {
   Future<void> _openWalletManager() async {
     final wc = context.read<WalletController>();
     final list = wc.wallets;
+    final nav = Navigator.of(context);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -52,7 +54,7 @@ class _WalletScreenState extends State<WalletScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _WalletManagerSheet(
+      builder: (sheetContext) => _WalletManagerSheet(
         wallets: list,
         selectedId: wc.activeWalletId ?? '',
         onSelect: (id) async {
@@ -62,6 +64,12 @@ class _WalletScreenState extends State<WalletScreen> {
           Navigator.of(context).pop();
           Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const AddWalletScreen()),
+          );
+        },
+        onOpenWalletDetails: (w) {
+          Navigator.of(sheetContext).pop();
+          nav.push<void>(
+            MaterialPageRoute<void>(builder: (_) => WalletDetailScreen(wallet: w)),
           );
         },
       ),
@@ -171,12 +179,14 @@ class _WalletManagerSheet extends StatefulWidget {
   final String selectedId;
   final ValueChanged<String> onSelect;
   final VoidCallback onAddWallet;
+  final ValueChanged<StoredWallet> onOpenWalletDetails;
 
   const _WalletManagerSheet({
     required this.wallets,
     required this.selectedId,
     required this.onSelect,
     required this.onAddWallet,
+    required this.onOpenWalletDetails,
   });
 
   @override
@@ -324,109 +334,129 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                       final selected = w.id == widget.selectedId;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 10),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () {
-                            widget.onSelect(w.id);
-                            Navigator.of(context).pop();
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: AppColors.background,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: AppColors.surfaceElevated,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Center(
-                                    child: Container(
-                                      width: 22,
-                                      height: 22,
-                                      decoration: BoxDecoration(
-                                        border: Border.all(color: AppColors.textMuted, width: 2),
-                                        borderRadius: BorderRadius.circular(5),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Text(
-                                            w.name,
-                                            style: const TextStyle(
-                                              color: AppColors.textPrimary,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+                          decoration: BoxDecoration(
+                            color: AppColors.background,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: () {
+                                    widget.onSelect(w.id);
+                                    Navigator.of(context).pop();
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
+                                    child: Row(
+                                      children: [
+                                        Container(
+                                          width: 44,
+                                          height: 44,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.surfaceElevated,
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: Center(
+                                            child: Container(
+                                              width: 22,
+                                              height: 22,
+                                              decoration: BoxDecoration(
+                                                border: Border.all(color: AppColors.textMuted, width: 2),
+                                                borderRadius: BorderRadius.circular(5),
+                                              ),
                                             ),
                                           ),
-                                          if (!w.backedUp) ...[
-                                            const SizedBox(width: 8),
-                                            Container(
-                                              width: 8,
-                                              height: 8,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Flexible(
+                                                    child: Text(
+                                                      w.name,
+                                                      style: const TextStyle(
+                                                        color: AppColors.textPrimary,
+                                                        fontSize: 14,
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                  if (!w.backedUp) ...[
+                                                    const SizedBox(width: 8),
+                                                    Container(
+                                                      width: 8,
+                                                      height: 8,
+                                                      decoration: const BoxDecoration(
+                                                        color: Colors.red,
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Row(
+                                                children: [
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                      color: AppColors.surfaceElevated,
+                                                      borderRadius: BorderRadius.circular(8),
+                                                    ),
+                                                    child: const Text(
+                                                      '助记词',
+                                                      style: TextStyle(
+                                                        color: AppColors.textSecondary,
+                                                        fontSize: 11,
+                                                        fontWeight: FontWeight.w500,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  const Text(
+                                                    'EVM',
+                                                    style: TextStyle(
+                                                      color: AppColors.textMuted,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (selected)
+                                          Padding(
+                                            padding: const EdgeInsets.only(right: 4),
+                                            child: Container(
+                                              width: 26,
+                                              height: 26,
                                               decoration: const BoxDecoration(
-                                                color: Colors.red,
+                                                color: AppColors.success,
                                                 shape: BoxShape.circle,
                                               ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: AppColors.surfaceElevated,
-                                              borderRadius: BorderRadius.circular(8),
-                                            ),
-                                            child: const Text(
-                                              '助记词',
-                                              style: TextStyle(
-                                                color: AppColors.textSecondary,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w500,
-                                              ),
+                                              child: const Icon(Icons.check, size: 16, color: Colors.white),
                                             ),
                                           ),
-                                          const SizedBox(width: 8),
-                                          const Text(
-                                            'EVM',
-                                            style: TextStyle(
-                                              color: AppColors.textMuted,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
-                                if (selected)
-                                  Container(
-                                    width: 26,
-                                    height: 26,
-                                    decoration: const BoxDecoration(
-                                      color: AppColors.success,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(Icons.check, size: 16, color: Colors.white),
-                                  ),
-                              ],
-                            ),
+                              ),
+                              IconButton(
+                                onPressed: () => widget.onOpenWalletDetails(w),
+                                icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
+                              ),
+                            ],
                           ),
                         ),
                       );

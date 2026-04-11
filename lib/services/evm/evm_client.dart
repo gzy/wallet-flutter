@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:web3dart/web3dart.dart';
 
 import '../../models/evm_network.dart';
-import 'evm_config.dart';
+import '../../config/evm_environment.dart';
 
 /// Debug 下把发往节点的 JSON-RPC 打到控制台（`flutter run` 终端 / IDE Debug Console）。
 class _DebugLogHttpClient extends http.BaseClient {
@@ -41,7 +41,7 @@ class EvmRpcPool {
 
     final inner = http.Client();
     final httpClient = kDebugMode ? _DebugLogHttpClient(inner) : inner;
-    final web3 = Web3Client(EvmConfig.rpcUrl(network), httpClient);
+    final web3 = Web3Client(EvmEnvironment.rpcUrl(network), httpClient);
     _httpClients[network] = httpClient;
     _web3Clients[network] = web3;
     return web3;

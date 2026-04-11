@@ -34,7 +34,7 @@ class _BackupPasswordScreenState extends State<BackupPasswordScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.5),
+      barrierColor: Colors.black.withValues(alpha: 0.5),
       builder: (_) {
         final localChecked = List<bool>.from(_checked);
         return StatefulBuilder(
@@ -164,12 +164,16 @@ class _BackupPasswordScreenState extends State<BackupPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     return Scaffold(
       backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(16, 10, 16, 16 + bottomInset),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
@@ -193,16 +197,18 @@ class _BackupPasswordScreenState extends State<BackupPasswordScreen> {
                 ],
               ),
               const SizedBox(height: 10),
-              Container(
-                width: 84,
-                height: 84,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(26),
-                  gradient: const LinearGradient(
-                      colors: [Color(0xFF8B5CF6), Color(0xFF2563EB)]),
+              Center(
+                child: Container(
+                  width: 84,
+                  height: 84,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(26),
+                    gradient: const LinearGradient(
+                        colors: [Color(0xFF8B5CF6), Color(0xFF2563EB)]),
+                  ),
+                  child: const Icon(Icons.cloud_upload_outlined,
+                      color: Colors.white, size: 40),
                 ),
-                child: const Icon(Icons.cloud_upload_outlined,
-                    color: Colors.white, size: 40),
               ),
               const SizedBox(height: 16),
               const Text(
@@ -307,31 +313,29 @@ class _BackupPasswordScreenState extends State<BackupPasswordScreen> {
                         color: AppColors.textSecondary, fontSize: 12)),
               ),
               const SizedBox(height: 14),
-              Expanded(
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline,
-                          color: AppColors.textMuted, size: 20),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '备份文件仅保存在本应用文档目录，已用你设置的密码加密。请自行妥善保管该文件与密码。',
-                          style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 12,
-                              height: 1.4),
-                        ),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline,
+                        color: AppColors.textMuted, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '备份文件仅保存在本应用文档目录，已用你设置的密码加密。请自行妥善保管该文件与密码。',
+                        style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                            height: 1.4),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 14),

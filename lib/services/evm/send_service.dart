@@ -3,6 +3,11 @@ import 'package:web3dart/web3dart.dart';
 import '../../models/evm_network.dart';
 import 'evm_client.dart';
 
+/// 去掉首尾空白与中间换行/空格，避免误粘贴导致解析异常。
+String _normalizeRecipientHex(String raw) {
+  return raw.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
+}
+
 BigInt _etherDecimalStringToWei(String amount) {
   final s = amount.trim();
   if (s.isEmpty) {
@@ -36,7 +41,12 @@ class SendService {
     required String amountEther,
   }) async {
     final client = EvmRpcPool.client(network);
-    final to = EthereumAddress.fromHex(toHex.trim());
+    final cleaned = _normalizeRecipientHex(toHex);
+    final to = EthereumAddress.fromHex(cleaned);
+    final fromAddr = credentials.address;
+    if (to.hex.toLowerCase() == fromAddr.hex.toLowerCase()) {
+      throw StateError('收款地址与当前钱包相同，无法向自己转账；请粘贴对方的钱包地址。');
+    }
     final wei = _etherDecimalStringToWei(amountEther);
     return client.sendTransaction(
       credentials,

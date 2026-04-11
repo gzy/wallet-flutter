@@ -7,6 +7,7 @@ import 'package:web3dart/web3dart.dart';
 import '../models/coin_data.dart';
 import '../models/evm_network.dart';
 import '../models/stored_wallet.dart';
+import '../config/evm_environment.dart';
 import '../services/evm/evm_client.dart';
 import '../services/evm/send_service.dart';
 import '../services/evm/token_service.dart';
@@ -149,7 +150,12 @@ class WalletController extends ChangeNotifier {
     await _storage.writeBackedUpForWallet(id, false);
     final next = [
       ..._wallets,
-      StoredWallet(id: id, name: name, backedUp: false)
+      StoredWallet(
+        id: id,
+        name: name,
+        backedUp: false,
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+      )
     ];
     await _storage.writeWalletList(next);
     await _storage.setActiveWalletId(id);
@@ -164,11 +170,37 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 若 [mnemonic] 规范化后与某已存钱包相同则返回该钱包，否则 `null`（助记词无效时亦返回 `null`）。
+  Future<StoredWallet?> findWalletWithSameMnemonic(String mnemonic) async {
+    final phrase = mnemonic.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (!MnemonicService.validateMnemonic(phrase)) {
+      return null;
+    }
+    final target = MnemonicService.normalizeForCompare(phrase);
+    for (final w in _wallets) {
+      final existing = await _storage.readMnemonicForWallet(w.id);
+      if (existing == null || existing.isEmpty) {
+        continue;
+      }
+      if (!MnemonicService.validateMnemonic(existing)) {
+        continue;
+      }
+      if (MnemonicService.normalizeForCompare(existing) == target) {
+        return w;
+      }
+    }
+    return null;
+  }
+
   /// 导入助记词钱包
   Future<void> importWallet(String mnemonic, String pin) async {
     final phrase = mnemonic.trim().replaceAll(RegExp(r'\s+'), ' ');
     if (!MnemonicService.validateMnemonic(phrase)) {
       throw StateError('助记词无效');
+    }
+    final duplicate = await findWalletWithSameMnemonic(phrase);
+    if (duplicate != null) {
+      throw StateError('该助记词已在钱包「${duplicate.name}」中使用，无需重复导入');
     }
     if (await _storage.hasPin()) {
       final r = await _storage.verifyPin(pin);
@@ -189,7 +221,12 @@ class WalletController extends ChangeNotifier {
     await _storage.writeBackedUpForWallet(id, false);
     final next = [
       ..._wallets,
-      StoredWallet(id: id, name: name, backedUp: false)
+      StoredWallet(
+        id: id,
+        name: name,
+        backedUp: false,
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+      )
     ];
     await _storage.writeWalletList(next);
     await _storage.setActiveWalletId(id);
@@ -223,14 +260,51 @@ class WalletController extends ChangeNotifier {
     if (id == null) {
       return;
     }
+    await renameWallet(id, name);
+  }
+
+  Future<void> renameWallet(String walletId, String name) async {
+    if (!_wallets.any((w) => w.id == walletId)) {
+      return;
+    }
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
       return;
     }
     _wallets = _wallets
-        .map((w) => w.id == id ? w.copyWith(name: trimmed) : w)
+        .map((w) => w.id == walletId ? w.copyWith(name: trimmed) : w)
         .toList();
     await _storage.writeWalletList(_wallets);
+    notifyListeners();
+  }
+
+  /// 删除钱包及其助记词；若删的是当前钱包则自动切换到列表中的第一个（若有）。
+  Future<void> deleteWallet(String id) async {
+    if (!_wallets.any((w) => w.id == id)) {
+      return;
+    }
+    await _storage.deleteWalletData(id);
+    final next = _wallets.where((w) => w.id != id).toList();
+    await _storage.writeWalletList(next);
+    _wallets = next;
+
+    if (_activeWalletId == id) {
+      if (next.isEmpty) {
+        _activeWalletId = null;
+        await _storage.clearActiveWalletId();
+        _credentials = null;
+        _addressHex = null;
+        _backedUp = false;
+        _evmCoins = [];
+      } else {
+        _activeWalletId = next.first.id;
+        await _storage.setActiveWalletId(_activeWalletId!);
+        await _loadCredentialsFromActiveMnemonic();
+        if (_credentials != null) {
+          await refreshBalances();
+        }
+      }
+    }
     notifyListeners();
   }
 
@@ -240,6 +314,20 @@ class WalletController extends ChangeNotifier {
       return null;
     }
     return _storage.readMnemonicForWallet(id);
+  }
+
+  /// 根据助记词推导该钱包的 EVM 地址（十六进制，带 0x），不切换当前钱包。
+  Future<String?> readAddressHexForWallet(String walletId) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return HdWalletService.privateKeyFromMnemonic(m).address.hex;
+    } catch (e, st) {
+      debugPrint('readAddressHexForWallet: $e\n$st');
+      return null;
+    }
   }
 
   Future<PinVerifyResult> verifyTransactionPin(String pin) =>
@@ -282,36 +370,26 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
     try {
       final addr = _credentials!.address;
-      final ethBal =
-          await _tokenService.getEthBalanceEther(EvmNetworkId.ethereum, addr);
-      final baseBal =
-          await _tokenService.getEthBalanceEther(EvmNetworkId.base, addr);
-      _evmCoins = [
-        CoinData(
-          id: 'eth_mainnet',
-          symbol: 'ETH',
-          name: 'Ethereum',
-          icon: '⚪',
-          network: 'Ethereum',
-          chainId: 1,
-          price: 0,
-          priceChange24h: 0,
-          balance: ethBal,
-          balanceUSD: 0,
-        ),
-        CoinData(
-          id: 'eth_base',
-          symbol: 'ETH',
-          name: 'Base',
-          icon: '🔵',
-          network: 'Base',
-          chainId: 8453,
-          price: 0,
-          priceChange24h: 0,
-          balance: baseBal,
-          balanceUSD: 0,
-        ),
-      ];
+      final coins = <CoinData>[];
+      for (final cfg in EvmEnvironment.nativeCoins) {
+        final bal =
+            await _tokenService.getEthBalanceEther(cfg.networkKey, addr);
+        coins.add(
+          CoinData(
+            id: cfg.coinListId,
+            symbol: cfg.symbol,
+            name: cfg.name,
+            icon: cfg.icon,
+            network: cfg.networkLabel,
+            chainId: EvmEnvironment.chainId(cfg.networkKey),
+            price: 0,
+            priceChange24h: 0,
+            balance: bal,
+            balanceUSD: 0,
+          ),
+        );
+      }
+      _evmCoins = coins;
     } catch (e, st) {
       debugPrint('refreshBalances: $e\n$st');
     } finally {

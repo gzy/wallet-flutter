@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../config/evm_environment.dart';
+import '../models/evm_network.dart';
 import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
 
@@ -14,13 +16,47 @@ class ReceiveScreen extends StatefulWidget {
 }
 
 class _ReceiveScreenState extends State<ReceiveScreen> {
-  static const List<_TokenOption> _tokens = [
-    _TokenOption(symbol: 'ETH', network: 'Ethereum', balance: 0, color: Color(0xFF6B7280)),
-    _TokenOption(symbol: 'ETH', network: 'Base', balance: 0, color: Color(0xFF60A5FA)),
-  ];
+  static const _receiveColors = {
+    EvmNetworkId.ethereum: Color(0xFF6B7280),
+    EvmNetworkId.base: Color(0xFF60A5FA),
+  };
 
+  late EvmNetworkId _receiveNetwork;
   bool _copied = false;
-  _TokenOption _token = _tokens.first;
+
+  @override
+  void initState() {
+    super.initState();
+    _receiveNetwork = EvmEnvironment.nativeCoins.first.networkKey;
+  }
+
+  List<_TokenOption> _tokenOptionsFor(WalletController w) {
+    return EvmEnvironment.nativeCoins.map((cfg) {
+      var bal = 0.0;
+      final cid = EvmEnvironment.chainId(cfg.networkKey);
+      for (final c in w.evmCoins) {
+        if (c.chainId == cid) {
+          bal = c.balance;
+          break;
+        }
+      }
+      return _TokenOption(
+        networkKey: cfg.networkKey,
+        symbol: cfg.symbol,
+        network: cfg.networkLabel,
+        balance: bal,
+        color: _receiveColors[cfg.networkKey]!,
+      );
+    }).toList();
+  }
+
+  _TokenOption _currentToken(WalletController w) {
+    final opts = _tokenOptionsFor(w);
+    return opts.firstWhere(
+      (o) => o.networkKey == _receiveNetwork,
+      orElse: () => opts.first,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,6 +81,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         ),
       );
     }
+
+    final token = _currentToken(wallet);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -82,10 +120,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               ),
               const SizedBox(height: 14),
               TextButton.icon(
-                onPressed: _openTokenPicker,
+                onPressed: () => _openTokenPicker(wallet),
                 icon: const Icon(Icons.currency_exchange, color: AppColors.textPrimary),
                 label: Text(
-                  '${_token.symbol} (${_token.network})',
+                  '${token.symbol} (${token.network})',
                   style: const TextStyle(color: AppColors.textPrimary),
                 ),
               ),
@@ -147,7 +185,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  '该地址只接收 ${_token.symbol} (${_token.network}) 资产，请勿转入其它币种。',
+                  '该地址只接收 ${token.symbol} (${token.network}) 资产，请勿转入其它币种。',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
                 ),
               ),
@@ -158,16 +196,17 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     );
   }
 
-  Future<void> _openTokenPicker() async {
+  Future<void> _openTokenPicker(WalletController wallet) async {
     String searchQuery = '';
-    final token = await showModalBottomSheet<_TokenOption>(
+    final picked = await showModalBottomSheet<EvmNetworkId>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
-            final filtered = _tokens.where((t) {
+            final all = _tokenOptionsFor(wallet);
+            final filtered = all.where((t) {
               if (searchQuery.isEmpty) return true;
               final q = searchQuery.toLowerCase();
               return t.symbol.toLowerCase().contains(q) ||
@@ -249,7 +288,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                           return ListTile(
                             contentPadding:
                                 const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                            onTap: () => Navigator.pop(context, t),
+                            onTap: () => Navigator.pop(context, t.networkKey),
                             leading: CircleAvatar(
                               radius: 20,
                               backgroundColor: t.color,
@@ -296,18 +335,20 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         );
       },
     );
-    if (token != null) {
-      setState(() => _token = token);
+    if (picked != null) {
+      setState(() => _receiveNetwork = picked);
     }
   }
 }
 
 class _TokenOption {
+  final EvmNetworkId networkKey;
   final String symbol;
   final String network;
   final double balance;
   final Color color;
   const _TokenOption({
+    required this.networkKey,
     required this.symbol,
     required this.network,
     required this.balance,

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/wallet_controller.dart';
 import '../services/wallet/local_backup_service.dart';
+import '../services/wallet/mnemonic_service.dart';
 import '../theme/app_colors.dart';
 import 'wallet_ready_screen.dart';
 
@@ -62,8 +63,9 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
             );
           } catch (e) {
             if (mounted) {
+              final msg = e is StateError ? e.message : '导入失败: $e';
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('导入失败: $e')),
+                SnackBar(content: Text(msg)),
               );
             }
             rethrow;
@@ -74,10 +76,25 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
   }
 
   Future<void> _submitMnemonicTab() async {
-    final phrase = _text.text.trim();
-    if (phrase.isEmpty) {
+    final raw = _text.text.trim();
+    if (raw.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请输入助记词')),
+      );
+      return;
+    }
+    final phrase = raw.replaceAll(RegExp(r'\s+'), ' ');
+    if (!MnemonicService.validateMnemonic(phrase)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('助记词无效，请检查单词与空格')),
+      );
+      return;
+    }
+    final dup = await context.read<WalletController>().findWalletWithSameMnemonic(phrase);
+    if (!mounted) return;
+    if (dup != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('该助记词已在钱包「${dup.name}」中使用，无需重复导入')),
       );
       return;
     }
@@ -86,7 +103,7 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
 
   /// iOS / Android 均走系统文档选择器；`withData: true` 将文件读入内存，避免部分机型路径权限问题。
   Future<void> _pickBackupFile() async {
-    final r = await FilePicker.platform.pickFiles(
+    final r = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: const ['json'],
       withData: true,
@@ -126,7 +143,22 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
       final json = utf8.decode(bytes);
       final phrase = LocalBackupService.decryptLocalBackup(json, pwd);
       if (!mounted) return;
-      await _openPinSheetWithPhrase(phrase);
+      final normalized = phrase.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (!MnemonicService.validateMnemonic(normalized)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('备份中的助记词无效')),
+        );
+        return;
+      }
+      final dup = await context.read<WalletController>().findWalletWithSameMnemonic(normalized);
+      if (!mounted) return;
+      if (dup != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('该助记词已在钱包「${dup.name}」中使用，无需重复导入')),
+        );
+        return;
+      }
+      await _openPinSheetWithPhrase(normalized);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -5,7 +5,7 @@ class CoinData {
   final String name;
   final String icon;
   final String? network;
-  /// EVM 链 ID（如 1 / 8453）；非链上资产为 null
+  /// EVM 链 ID（随 [EvmEnvironment] 主/测变化，如 1、11155111、8453、84532）；非链上资产为 null
   final int? chainId;
   final double price;
   final double priceChange24h;

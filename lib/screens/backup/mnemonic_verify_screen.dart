@@ -15,8 +15,9 @@ class MnemonicVerifyScreen extends StatefulWidget {
 
 class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
   List<String> _correctOrder = [];
-  List<String> _shuffled = [];
-  final List<String> _selected = [];
+  /// 原助记词每个词的下标 0..n-1 打乱后的点击区顺序（同一单词出现两次会有两个不同下标）。
+  List<int> _shuffledIndices = [];
+  final List<int> _pickedIndices = [];
   bool _loading = true;
   String? _loadError;
 
@@ -34,10 +35,10 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
       }
       final words = s.trim().split(RegExp(r'\s+'));
       final rng = Random.secure();
-      final shuffled = List<String>.from(words)..shuffle(rng);
+      final indices = List<int>.generate(words.length, (i) => i)..shuffle(rng);
       setState(() {
         _correctOrder = words;
-        _shuffled = shuffled;
+        _shuffledIndices = indices;
         _loading = false;
       });
     } catch (e) {
@@ -48,17 +49,20 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
     }
   }
 
-  void _tapWord(String w) {
-    if (_selected.contains(w)) return;
-    if (_selected.length >= _correctOrder.length) return;
-    setState(() => _selected.add(w));
+  void _tapWord(int wordIndex) {
+    if (wordIndex < 0 || wordIndex >= _correctOrder.length) return;
+    if (_pickedIndices.contains(wordIndex)) return;
+    if (_pickedIndices.length >= _correctOrder.length) return;
+    setState(() => _pickedIndices.add(wordIndex));
   }
 
-  void _clear() => setState(() => _selected.clear());
+  void _clear() => setState(() => _pickedIndices.clear());
 
   Future<void> _verify() async {
-    if (_selected.length != _correctOrder.length) return;
-    final ok = List.generate(_correctOrder.length, (i) => _selected[i] == _correctOrder[i]).every((e) => e);
+    if (_pickedIndices.length != _correctOrder.length) return;
+    final pickedWords =
+        _pickedIndices.map((i) => _correctOrder[i]).toList(growable: false);
+    final ok = List.generate(_correctOrder.length, (i) => pickedWords[i] == _correctOrder[i]).every((e) => e);
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('助记词顺序不正确，请重试')));
       _clear();
@@ -90,7 +94,7 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
       );
     }
 
-    final complete = _selected.length == _correctOrder.length;
+    final complete = _pickedIndices.length == _correctOrder.length;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -138,7 +142,8 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
                   childAspectRatio: 2.25,
                 ),
                 itemBuilder: (context, i) {
-                  final word = i < _selected.length ? _selected[i] : null;
+                  final word =
+                      i < _pickedIndices.length ? _correctOrder[_pickedIndices[i]] : null;
                   final filled = word != null;
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -177,7 +182,7 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
               child: Align(
                 alignment: Alignment.centerRight,
                 child: OutlinedButton(
-                  onPressed: _selected.isEmpty ? null : _clear,
+                  onPressed: _pickedIndices.isEmpty ? null : _clear,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.accent,
                     side: const BorderSide(color: AppColors.accent),
@@ -195,12 +200,13 @@ class _MnemonicVerifyScreenState extends State<MnemonicVerifyScreen> {
                 child: Wrap(
                   spacing: 10,
                   runSpacing: 10,
-                  children: _shuffled.map((w) {
-                    final selected = _selected.contains(w);
+                  children: _shuffledIndices.map((wordIndex) {
+                    final w = _correctOrder[wordIndex];
+                    final selected = _pickedIndices.contains(wordIndex);
                     return SizedBox(
                       height: 42,
                       child: FilledButton(
-                        onPressed: selected ? null : () => _tapWord(w),
+                        onPressed: selected ? null : () => _tapWord(wordIndex),
                         style: FilledButton.styleFrom(
                           backgroundColor: selected ? AppColors.surface : Colors.white,
                           foregroundColor: selected ? AppColors.textMuted : Colors.black,
