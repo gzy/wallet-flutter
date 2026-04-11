@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 排除 FlutterSecureStorage 的 SharedPreferences，避免云备份/恢复导致
+     java.security.InvalidKeyException: Failed to unwrap key（见 flutter_secure_storage README） -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="FlutterSecureStorage.xml"/>
+</full-backup-content>

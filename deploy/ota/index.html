@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<meta name="color-scheme" content="dark" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<title>Wallet Flutter · 测试安装</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&family=Noto+Sans+SC:wght@400;500;600&display=swap" rel="stylesheet" />
+	<style>
+		:root {
+			--bg0: #0a0e14;
+			--bg1: #121820;
+			--line: rgba(255, 255, 255, 0.08);
+			--text: #e8edf4;
+			--muted: #8b98a8;
+			--accent: #3ee0b3;
+			--accent-dim: rgba(62, 224, 179, 0.15);
+			--warn: #f0c674;
+			--radius: 18px;
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			min-height: 100dvh;
+			font-family: "Noto Sans SC", "DM Sans", system-ui, sans-serif;
+			background:
+				radial-gradient(1200px 600px at 80% -10%, rgba(62, 224, 179, 0.12), transparent 55%),
+				radial-gradient(800px 400px at 10% 100%, rgba(100, 140, 255, 0.08), transparent 50%),
+				var(--bg0);
+			color: var(--text);
+			line-height: 1.55;
+		}
+		.wrap {
+			max-width: 420px;
+			margin: 0 auto;
+			padding: 2.25rem 1.25rem 3rem;
+		}
+		.badge {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.4rem;
+			font-size: 0.72rem;
+			font-weight: 600;
+			letter-spacing: 0.06em;
+			text-transform: uppercase;
+			color: var(--accent);
+			background: var(--accent-dim);
+			border: 1px solid rgba(62, 224, 179, 0.35);
+			padding: 0.35rem 0.65rem;
+			border-radius: 999px;
+		}
+		h1 {
+			font-family: "DM Sans", "Noto Sans SC", sans-serif;
+			font-size: 1.65rem;
+			font-weight: 700;
+			letter-spacing: -0.02em;
+			margin: 1rem 0 0.35rem;
+		}
+		.sub {
+			color: var(--muted);
+			font-size: 0.95rem;
+			margin: 0 0 1.75rem;
+		}
+		.card {
+			background: linear-gradient(165deg, var(--bg1) 0%, #0d1218 100%);
+			border: 1px solid var(--line);
+			border-radius: var(--radius);
+			padding: 1.35rem 1.25rem;
+			box-shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
+		}
+		.ver {
+			font-size: 0.85rem;
+			color: var(--muted);
+			margin-bottom: 1.1rem;
+		}
+		.ver strong { color: var(--text); font-weight: 600; }
+		a.install {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 0.5rem;
+			width: 100%;
+			padding: 0.95rem 1rem;
+			font-size: 1.02rem;
+			font-weight: 600;
+			color: #061210;
+			background: linear-gradient(135deg, var(--accent) 0%, #2ec99a 100%);
+			border: none;
+			border-radius: 14px;
+			text-decoration: none;
+			box-shadow: 0 8px 24px rgba(62, 224, 179, 0.25);
+			transition: transform 0.15s ease, box-shadow 0.15s ease;
+		}
+		a.install:active { transform: scale(0.98); }
+		.hint {
+			margin-top: 1.1rem;
+			padding: 0.85rem 1rem;
+			font-size: 0.82rem;
+			color: var(--warn);
+			background: rgba(240, 198, 116, 0.08);
+			border: 1px solid rgba(240, 198, 116, 0.25);
+			border-radius: 12px;
+		}
+		.steps {
+			margin-top: 1.5rem;
+			padding-top: 1.25rem;
+			border-top: 1px solid var(--line);
+			font-size: 0.86rem;
+			color: var(--muted);
+		}
+		.steps ol {
+			margin: 0.5rem 0 0;
+			padding-left: 1.2rem;
+		}
+		.steps li { margin: 0.35rem 0; }
+		footer {
+			margin-top: 2rem;
+			font-size: 0.75rem;
+			color: var(--muted);
+			text-align: center;
+		}
+	</style>
+</head>
+<body>
+	<div class="wrap">
+		<span class="badge">Ad Hoc</span>
+		<h1>Wallet Flutter</h1>
+		<p class="sub">内部测试安装 · 请使用 iPhone 上的 <strong style="color: var(--text);">Safari</strong> 打开本页</p>
+
+		<div class="card">
+			<p class="ver">版本 <strong id="v-name">1.0.0</strong>（构建 <strong id="v-build">1</strong>）</p>
+			<a id="install" class="install" href="#">安装到本机</a>
+			<div class="hint">若按钮无反应：确认已用 Safari；设置 → 通用 → VPN 与设备管理 → 信任开发者。</div>
+			<div class="steps">
+				<strong style="color: var(--text);">说明</strong>
+				<ol>
+					<li>仅已登记 UDID 的设备可安装。</li>
+					<li>将 <code style="color: var(--accent);">WalletFlutter.ipa</code>、<code style="color: var(--accent);">manifest.plist</code> 与本页放在同一 HTTPS 路径下。</li>
+					<li>修改本页顶部脚本中的 <code style="color: var(--accent);">BASE</code>，并与 plist 内 ipa 地址保持一致。</li>
+				</ol>
+			</div>
+		</div>
+
+		<footer>com.eop.walletflutter</footer>
+	</div>
+
+	<script>
+		(function () {
+			// 改成你部署的 HTTPS 目录（无尾部斜杠也可，下面会规范化）
+			var BASE = "https://example.com/wallet-ota";
+
+			function normBase(b) {
+				return b.replace(/\/+$/, "");
+			}
+			BASE = normBase(BASE);
+			var manifestUrl = BASE + "/manifest.plist";
+			var installHref =
+				"itms-services://?action=download-manifest&url=" +
+				encodeURIComponent(manifestUrl);
+			var a = document.getElementById("install");
+			a.href = installHref;
+		})();
+	</script>
+</body>
+</html>
