@@ -7,7 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:path_provider/path_provider.dart';
 
-/// 将助记词用备份密码加密后写入应用文档目录（不上传 iCloud）
+/// 将助记词用备份密码加密后写入应用文档目录（本地文件，不依赖 iCloud/Google 等云入口）。
 class LocalBackupService {
   LocalBackupService._();
 

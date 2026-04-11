@@ -1,9 +1,14 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import '../../theme/app_colors.dart';
 import 'backup_password_screen.dart';
 
 class BackupMethodScreen extends StatelessWidget {
   const BackupMethodScreen({super.key});
+
+  /// iCloud 仅存在于 Apple 生态；Android 不应展示该入口。
+  static bool get _showICloudBackupTile =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
   @override
   Widget build(BuildContext context) {
@@ -51,18 +56,20 @@ class BackupMethodScreen extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Column(
                 children: [
-                  _MethodTile(
-                    icon: Icons.cloud_outlined,
-                    title: '备份到iCloud',
-                    subtitle: '把备份文件保存到iCloud。',
-                    trailingDisabled: true,
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('iCloud 备份流程暂未接入')),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 12),
+                  if (_showICloudBackupTile) ...[
+                    _MethodTile(
+                      icon: Icons.cloud_outlined,
+                      title: '备份到 iCloud',
+                      subtitle: '把备份文件保存到 iCloud（开发中）。',
+                      trailingDisabled: true,
+                      onTap: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('iCloud 备份流程暂未接入')),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   _MethodTile(
                     icon: Icons.description_outlined,
                     title: '手动备份',
