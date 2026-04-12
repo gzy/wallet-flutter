@@ -39,7 +39,7 @@ class WalletApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '我的加密钱包',
+      title: 'Uone',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,

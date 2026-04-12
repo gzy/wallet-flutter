@@ -80,7 +80,7 @@ class _UnlockScreenState extends State<UnlockScreen> {
             ),
             const SizedBox(height: 12),
             const Text(
-              '使用密码解锁我的加密钱包',
+              '使用密码解锁 Uone',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: AppColors.textSecondary,

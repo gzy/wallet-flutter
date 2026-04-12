@@ -44,6 +44,28 @@ String _normalizeAddrField(String raw) {
   return raw.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
 }
 
+/// [EtherAmount.fromBase10String] 的 Gwei 参数只能是整数串；带小数时用本函数转 wei。
+BigInt _decimalGweiStringToWei(String amount) {
+  final s = amount.trim();
+  if (s.isEmpty) {
+    throw const FormatException('empty gwei');
+  }
+  if (s.startsWith('-')) {
+    throw const FormatException('negative gwei');
+  }
+  final parts = s.split('.');
+  if (parts.length > 2) {
+    throw const FormatException('invalid gwei');
+  }
+  var whole = parts[0].isEmpty ? '0' : parts[0];
+  var frac = parts.length > 1 ? parts[1] : '';
+  if (frac.length > 9) {
+    frac = frac.substring(0, 9);
+  }
+  frac = frac.padRight(9, '0');
+  return BigInt.parse(whole) * BigInt.from(1000000000) + BigInt.parse(frac);
+}
+
 class _TokenItem {
   final String symbol;
   final String network;
@@ -70,6 +92,22 @@ class TransferScreen extends StatefulWidget {
 
   @override
   State<TransferScreen> createState() => _TransferScreenState();
+}
+
+/// 转账金额相对当前币种余额是否超额（仅 UI 校验，不弹窗）。
+String? _transferAmountBalanceError(String amountRaw, _TokenItem sel) {
+  final t = amountRaw.trim();
+  if (t.isEmpty) {
+    return null;
+  }
+  final v = double.tryParse(t);
+  if (v == null || v <= 0) {
+    return null;
+  }
+  if (v > sel.balance + 1e-12) {
+    return '转账金额超过可用余额（当前可用 ${sel.balance} ${sel.symbol}）';
+  }
+  return null;
 }
 
 class _TransferScreenState extends State<TransferScreen> {
@@ -180,6 +218,8 @@ class _TransferScreenState extends State<TransferScreen> {
       return;
     }
     _syncUsdFromAmount(context.read<WalletController>());
+    // 刷新「下一步」可用态与超额提示（依赖 [_amount.text]）。
+    setState(() {});
   }
 
   void _onUsdFieldChanged() {
@@ -187,6 +227,7 @@ class _TransferScreenState extends State<TransferScreen> {
       return;
     }
     _syncAmountFromUsd(context.read<WalletController>());
+    setState(() {});
   }
 
   _TokenItem _selectedToken(List<_TokenItem> tokens) =>
@@ -214,6 +255,8 @@ class _TransferScreenState extends State<TransferScreen> {
     final wallet = context.watch<WalletController>();
     final tokens = _tokensFor(wallet);
     final sel = _selectedToken(tokens);
+    final amountBalanceErr = _transferAmountBalanceError(_amount.text, sel);
+    final canOpenConfirm = amountBalanceErr == null;
     final fromAddr = wallet.addressHex;
     final walletName = wallet.activeWallet?.name.trim();
     final fromWalletLabel = (walletName != null && walletName.isNotEmpty)
@@ -224,6 +267,7 @@ class _TransferScreenState extends State<TransferScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: AppColors.background,
         elevation: 0,
@@ -231,184 +275,240 @@ class _TransferScreenState extends State<TransferScreen> {
         title: const Text('转账', style: TextStyle(fontSize: 22)),
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Column(
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: _box(
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            radius: 11,
-                            backgroundColor: Color(0xFF30343A),
-                            child: Icon(Icons.description_outlined,
-                                size: 13, color: AppColors.textSecondary),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              fromWalletLabel,
-                              style: const TextStyle(fontSize: 16),
-                              overflow: TextOverflow.ellipsis,
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _box(
+                            child: Row(
+                              children: [
+                                const CircleAvatar(
+                                  radius: 11,
+                                  backgroundColor: Color(0xFF30343A),
+                                  child: Icon(Icons.description_outlined,
+                                      size: 13, color: AppColors.textSecondary),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    fromWalletLabel,
+                                    style: const TextStyle(fontSize: 16),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _box(
-                    child: Text(
-                      fromAddr != null
-                          ? '${fromAddr.substring(0, 4)}…${fromAddr.substring(fromAddr.length - 4)}'
-                          : '—',
-                      style: const TextStyle(
-                          color: AppColors.textSecondary, fontSize: 16),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _box(
-                child: InkWell(
-                  onTap: () => _openTokenPicker(tokens),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: sel.color,
-                        child: Text(
-                          sel.symbol.substring(0, 1),
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w700),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(width: 8),
+                        _box(
+                          child: Text(
+                            fromAddr != null
+                                ? '${fromAddr.substring(0, 4)}…${fromAddr.substring(fromAddr.length - 4)}'
+                                : '—',
+                            style: const TextStyle(
+                                color: AppColors.textSecondary, fontSize: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _box(
+                      child: InkWell(
+                        onTap: () => _openTokenPicker(tokens),
+                        child: Row(
                           children: [
-                            Text(
-                              sel.symbol,
-                              style: const TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.w600),
+                            CircleAvatar(
+                              radius: 22,
+                              backgroundColor: sel.color,
+                              child: Text(
+                                sel.symbol.substring(0, 1),
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700),
+                              ),
                             ),
-                            Text(
-                              sel.network,
-                              style: const TextStyle(
-                                  fontSize: 15, color: AppColors.textSecondary),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    sel.symbol,
+                                    style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                  Text(
+                                    sel.network,
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        color: AppColors.textSecondary),
+                                  ),
+                                ],
+                              ),
                             ),
+                            const Icon(Icons.chevron_right,
+                                color: AppColors.textSecondary, size: 18),
                           ],
                         ),
                       ),
-                      const Icon(Icons.chevron_right,
-                          color: AppColors.textSecondary, size: 18),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  const Text('收款地址', style: TextStyle(fontSize: 18)),
-                  const Spacer(),
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    icon: const Icon(Icons.perm_contact_calendar_outlined,
-                        size: 20, color: AppColors.textSecondary),
-                    onPressed: () async {
-                      final picked = await Navigator.of(context).push<String>(
-                        MaterialPageRoute<String>(
-                          builder: (_) => AddressBookScreen(
-                            symbol: sel.symbol,
-                            networkLabel: sel.network,
-                          ),
-                        ),
-                      );
-                      if (picked != null && picked.trim().isNotEmpty && mounted) {
-                        setState(() => _address.text = picked.trim());
-                      }
-                    },
-                  ),
-                  const SizedBox(
-                      height: 18,
-                      child: VerticalDivider(color: AppColors.borderSoft)),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                    icon: const Icon(Icons.fullscreen,
-                        size: 20, color: AppColors.textSecondary),
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('全屏输入功能开发中')),
-                      );
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _input(_address, '请输入地址、Space ID、ENS...'),
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.transparent,
-                  border: Border.all(color: AppColors.borderSoft),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '请确保您的收款地址支持${sel.network}（EVM）网络。',
-                  style: const TextStyle(
-                      color: AppColors.textSecondary, fontSize: 14),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _label('金额'),
-              _input(_amount, '0.00', suffix: sel.symbol, withMax: true),
-              const SizedBox(height: 8),
-              _input(_usd, '0.00', suffix: 'USD'),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '可用余额: ${sel.balance} ${sel.symbol}',
-                  style: const TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: [AppColors.accentStart, AppColors.accentEnd],
                     ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        const Text('收款地址', style: TextStyle(fontSize: 18)),
+                        const Spacer(),
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 36, minHeight: 36),
+                          icon: const Icon(Icons.perm_contact_calendar_outlined,
+                              size: 20, color: AppColors.textSecondary),
+                          onPressed: () async {
+                            final picked =
+                                await Navigator.of(context).push<String>(
+                              MaterialPageRoute<String>(
+                                builder: (_) => AddressBookScreen(
+                                  symbol: sel.symbol,
+                                  networkLabel: sel.network,
+                                ),
+                              ),
+                            );
+                            if (picked != null &&
+                                picked.trim().isNotEmpty &&
+                                mounted) {
+                              setState(() => _address.text = picked.trim());
+                            }
+                          },
+                        ),
+                        const SizedBox(
+                            height: 18,
+                            child:
+                                VerticalDivider(color: AppColors.borderSoft)),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints(minWidth: 36, minHeight: 36),
+                          icon: const Icon(Icons.fullscreen,
+                              size: 20, color: AppColors.textSecondary),
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('全屏输入功能开发中')),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _input(_address, '请输入地址、Space ID、ENS...'),
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.transparent,
+                        border: Border.all(color: AppColors.borderSoft),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '请确保您的收款地址支持${sel.network}（EVM）网络。',
+                        style: const TextStyle(
+                            color: AppColors.textSecondary, fontSize: 14),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _label('金额'),
+                    _input(
+                      _amount,
+                      '0.00',
+                      suffix: sel.symbol,
+                      withMax: true,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: false,
+                      ),
+                      textInputAction: TextInputAction.next,
+                    ),
+                    const SizedBox(height: 8),
+                    _input(
+                      _usd,
+                      '0.00',
+                      suffix: 'USD',
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                        signed: false,
+                      ),
+                      textInputAction: TextInputAction.done,
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '可用余额: ${sel.balance} ${sel.symbol}',
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    if (amountBalanceErr != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        amountBalanceErr,
+                        style: const TextStyle(
+                          color: AppColors.error,
+                          fontSize: 13,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Opacity(
+                opacity: canOpenConfirm ? 1 : 0.45,
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: [AppColors.accentStart, AppColors.accentEnd],
+                      ),
                       borderRadius: BorderRadius.circular(10),
-                      onTap: () => _openConfirmSheet(tokens),
-                      child: const Center(
-                        child: Text(
-                          '下一步',
-                          style: TextStyle(
-                            fontSize: 18,
-                            color: AppColors.accentText,
-                            fontWeight: FontWeight.w500,
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: canOpenConfirm
+                            ? () => _openConfirmSheet(tokens)
+                            : null,
+                        child: const Center(
+                          child: Text(
+                            '下一步',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: AppColors.accentText,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
                       ),
@@ -416,9 +516,8 @@ class _TransferScreenState extends State<TransferScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -607,6 +706,10 @@ class _TransferScreenState extends State<TransferScreen> {
       );
       return;
     }
+    final sel = _selectedToken(tokens);
+    if (_transferAmountBalanceError(_amount.text, sel) != null) {
+      return;
+    }
     final from = wallet.addressHex ?? '';
     final toNorm = _normalizeAddrField(_address.text);
     try {
@@ -626,7 +729,6 @@ class _TransferScreenState extends State<TransferScreen> {
       );
       return;
     }
-    final sel = _selectedToken(tokens);
     final fromShort = from.length > 10
         ? '${from.substring(0, 6)}…${from.substring(from.length - 4)}'
         : from;
@@ -682,6 +784,9 @@ class _TransferScreenState extends State<TransferScreen> {
     String hint, {
     String? suffix,
     bool withMax = false,
+    TextInputType? keyboardType,
+    TextInputAction? textInputAction,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -694,6 +799,9 @@ class _TransferScreenState extends State<TransferScreen> {
           Expanded(
             child: TextField(
               controller: controller,
+              keyboardType: keyboardType,
+              textInputAction: textInputAction,
+              inputFormatters: inputFormatters,
               style:
                   const TextStyle(color: AppColors.textPrimary, fontSize: 16),
               decoration: InputDecoration(
@@ -711,13 +819,16 @@ class _TransferScreenState extends State<TransferScreen> {
                 final tokens = _tokensFor(w);
                 final sel = _selectedToken(tokens);
                 final b = sel.balance;
-                _amount.text = b == 0 ? '0' : b.toStringAsFixed(8).replaceFirst(RegExp(r'\.?0+$'), '');
+                _amount.text = b == 0
+                    ? '0'
+                    : b.toStringAsFixed(8).replaceFirst(RegExp(r'\.?0+$'), '');
                 _syncUsdFromAmount(w);
                 setState(() {});
               },
               borderRadius: BorderRadius.circular(8),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 margin: const EdgeInsets.only(right: 8),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(8),
@@ -760,20 +871,26 @@ Widget _transferConfirmCard({required List<Widget> children}) {
   );
 }
 
-Widget _transferKvRow(String left, String right, {bool rightIsAddress = false}) {
-  return Row(
-    crossAxisAlignment:
-        rightIsAddress ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+/// 确认弹窗用：标签独占一行，内容在下方全宽展示，避免窄屏双列把长文案挤成「…」。
+Widget _transferKvRow(String left, String right,
+    {bool rightIsAddress = false}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text(left, style: const TextStyle(color: AppColors.textSecondary)),
-      const Spacer(),
-      Flexible(
-        child: Text(
-          right,
-          maxLines: rightIsAddress ? 2 : 1,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.right,
-          style: const TextStyle(color: AppColors.textPrimary),
+      Text(
+        left,
+        style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        right,
+        textAlign: rightIsAddress ? TextAlign.left : TextAlign.right,
+        softWrap: true,
+        maxLines: rightIsAddress ? 5 : 4,
+        style: TextStyle(
+          color: AppColors.textPrimary,
+          fontSize: rightIsAddress ? 13 : 14,
+          height: 1.35,
         ),
       ),
     ],
@@ -875,8 +992,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   }
 
   BigInt get _customTipWei {
-    final s = _customGwei.toStringAsFixed(9);
-    return EtherAmount.fromBase10String(EtherUnit.gwei, s).getInWei;
+    return _decimalGweiStringToWei(_customGwei.toStringAsFixed(9));
   }
 
   String _gasFeeTitle(NativeTransferFeeQuote? quote) {
@@ -953,7 +1069,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     }
   }
 
-  Widget _gasOption(
+  Widget _gasCell(
     NativeTransferFeeQuote? quote,
     String level, {
     bool isCustom = false,
@@ -965,56 +1081,60 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             level,
             isCustom ? _customTipWei : BigInt.zero,
           );
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: InkWell(
-          onTap: _quoteLoading
-              ? null
-              : () {
-                  if (isCustom) {
-                    _openCustomGasDialog();
-                    return;
-                  }
-                  setState(() => _gasLevel = level);
-                },
+    return InkWell(
+      onTap: _quoteLoading
+          ? null
+          : () {
+              if (isCustom) {
+                _openCustomGasDialog();
+                return;
+              }
+              setState(() => _gasLevel = level);
+            },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 78),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF2F2F36) : const Color(0xFF1B1B1F),
           borderRadius: BorderRadius.circular(10),
-          child: Container(
-            height: 72,
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            decoration: BoxDecoration(
-              color:
-                  isActive ? const Color(0xFF2F2F36) : const Color(0xFF1B1B1F),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isActive ? AppColors.accent : const Color(0xFF505050),
+          border: Border.all(
+            color: isActive ? AppColors.accent : const Color(0xFF505050),
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              level,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _usdForLevel(quote, level),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.success,
               ),
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(level, style: const TextStyle(fontSize: 12)),
-                const SizedBox(height: 2),
-                Text(
-                  _usdForLevel(quote, level),
-                  style: const TextStyle(
-                    fontSize: 10,
-                    color: AppColors.success,
-                  ),
-                ),
-                Text(
-                  gweiStr,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 9,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
+            const SizedBox(height: 2),
+            Text(
+              gweiStr,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textSecondary,
+                height: 1.2,
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -1087,10 +1207,17 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    _gasOption(quote, '低'),
-                    _gasOption(quote, '中'),
-                    _gasOption(quote, '高'),
-                    _gasOption(quote, '自定义', isCustom: true),
+                    Expanded(child: _gasCell(quote, '低')),
+                    const SizedBox(width: 8),
+                    Expanded(child: _gasCell(quote, '中')),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: _gasCell(quote, '高')),
+                    const SizedBox(width: 8),
+                    Expanded(child: _gasCell(quote, '自定义', isCustom: true)),
                   ],
                 ),
               ],
@@ -1138,59 +1265,73 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                             onTap: _quoteLoading
                                 ? null
                                 : () async {
-                            Navigator.pop(widget.sheetContext);
-                            final messenger =
-                                ScaffoldMessenger.of(widget.hostContext);
-                            final amountStr = widget.amountStr;
-                            final amount = double.tryParse(amountStr);
-                            if (amount == null || amount <= 0) {
-                              messenger.showSnackBar(
-                                const SnackBar(content: Text('金额无效')),
-                              );
-                              return;
-                            }
-                            final ok = await PinVerifySheet.show(
-                              widget.hostContext,
-                              title: '确认转账',
-                              subtitle: '请输入 6 位 PIN 以授权本次转账。',
-                              verify: (pin) => widget.hostContext
-                                  .read<WalletController>()
-                                  .verifyTransactionPin(pin),
-                            );
-                            if (ok != true) {
-                              messenger.showSnackBar(
-                                const SnackBar(content: Text('已取消或 PIN 未通过')),
-                              );
-                              return;
-                            }
-                            NativeTransferFeeQuote? q = _resolvedQuote;
-                            q ??= await _fetchQuote(isInitial: false);
-                            final tp = q?.transactionParams(
-                              gasLevel: _gasLevel,
-                              customPriorityWei: _customTipWei,
-                            );
-                            try {
-                              final hash = await widget.wallet.sendEth(
-                                network: widget.sel.evmNetwork,
-                                toHex: widget.toHexNormalized,
-                                amountEther: amountStr,
-                                maxGas: tp?.maxGas,
-                                gasPrice: tp?.gasPrice,
-                                maxFeePerGas: tp?.maxFeePerGas,
-                                maxPriorityFeePerGas: tp?.maxPriorityFeePerGas,
-                              );
-                              messenger.showSnackBar(
-                                SnackBar(content: Text('已广播: $hash')),
-                              );
-                              await widget.wallet.refreshBalances();
-                            } catch (e) {
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text(_mapTransferSendError(e)),
-                                ),
-                              );
-                            }
-                          },
+                                    final messenger = ScaffoldMessenger.of(
+                                        widget.hostContext);
+                                    final amountStr = widget.amountStr;
+                                    final amount = double.tryParse(amountStr);
+                                    if (amount == null || amount <= 0) {
+                                      messenger.showSnackBar(
+                                        const SnackBar(content: Text('金额无效')),
+                                      );
+                                      return;
+                                    }
+                                    if (_transferAmountBalanceError(
+                                            amountStr, widget.sel) !=
+                                        null) {
+                                      Navigator.pop(widget.sheetContext);
+                                      return;
+                                    }
+                                    Navigator.pop(widget.sheetContext);
+                                    final ok = await PinVerifySheet.show(
+                                      widget.hostContext,
+                                      title: '确认转账',
+                                      subtitle: '请输入 6 位 PIN 以授权本次转账。',
+                                      verify: (pin) => widget.hostContext
+                                          .read<WalletController>()
+                                          .verifyTransactionPin(pin),
+                                    );
+                                    if (ok != true) {
+                                      messenger.showSnackBar(
+                                        const SnackBar(
+                                            content: Text('已取消或 PIN 未通过')),
+                                      );
+                                      return;
+                                    }
+                                    NativeTransferFeeQuote? q = _resolvedQuote;
+                                    q ??= await _fetchQuote(isInitial: false);
+                                    final tp = q?.transactionParams(
+                                      gasLevel: _gasLevel,
+                                      customPriorityWei: _customTipWei,
+                                    );
+                                    try {
+                                      final hash = await widget.wallet.sendEth(
+                                        network: widget.sel.evmNetwork,
+                                        toHex: widget.toHexNormalized,
+                                        amountEther: amountStr,
+                                        maxGas: tp?.maxGas,
+                                        gasPrice: tp?.gasPrice,
+                                        maxFeePerGas: tp?.maxFeePerGas,
+                                        maxPriorityFeePerGas:
+                                            tp?.maxPriorityFeePerGas,
+                                      );
+                                      messenger.showSnackBar(
+                                        SnackBar(content: Text('已广播: $hash')),
+                                      );
+                                      await widget.wallet.refreshBalances();
+                                      if (!widget.hostContext.mounted) {
+                                        return;
+                                      }
+                                      // 关闭转账页，回到栈中已有的币种详情（或首页），避免再 push 一层详情导致连点返回仍是详情。
+                                      Navigator.of(widget.hostContext).pop();
+                                    } catch (e) {
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          content:
+                                              Text(_mapTransferSendError(e)),
+                                        ),
+                                      );
+                                    }
+                                  },
                             child: const Center(
                               child: Text(
                                 '转出',
@@ -1214,4 +1355,3 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     );
   }
 }
-

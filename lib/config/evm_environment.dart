@@ -91,6 +91,37 @@ class EvmEnvironment {
     }
   }
 
+  /// 按链 ID 反查 [EvmNetworkId]（仅覆盖当前 [flavor] 下 [nativeCoins] 中的链）。
+  static EvmNetworkId? networkIdForChainId(int? targetChainId) {
+    if (targetChainId == null) {
+      return null;
+    }
+    for (final cfg in nativeCoins) {
+      if (chainId(cfg.networkKey) == targetChainId) {
+        return cfg.networkKey;
+      }
+    }
+    return null;
+  }
+
+  /// Blockscout 兼容 REST 根路径（形如 `https://eth-sepolia.blockscout.com/api`），用于 `txlist` 等。
+  ///
+  /// 文档形态参考：[Blockscout account txlist](https://eth-sepolia.blockscout.com/api?module=account&action=txlist&address=0x…)。
+  static String? blockscoutApiRoot(EvmNetworkId id) {
+    switch (flavor) {
+      case EvmDeployFlavor.testnet:
+        return switch (id) {
+          EvmNetworkId.ethereum => 'https://eth-sepolia.blockscout.com/api',
+          EvmNetworkId.base => 'https://base-sepolia.blockscout.com/api',
+        };
+      case EvmDeployFlavor.mainnet:
+        return switch (id) {
+          EvmNetworkId.ethereum => 'https://eth.blockscout.com/api',
+          EvmNetworkId.base => 'https://base.blockscout.com/api',
+        };
+    }
+  }
+
   static String explorerTxUrl(EvmNetworkId id, String txHash) {
     final h = txHash.startsWith('0x') ? txHash : '0x$txHash';
     switch (flavor) {
@@ -103,6 +134,22 @@ class EvmEnvironment {
         return switch (id) {
           EvmNetworkId.ethereum => 'https://etherscan.io/tx/$h',
           EvmNetworkId.base => 'https://basescan.org/tx/$h',
+        };
+    }
+  }
+
+  static String explorerAddressUrl(EvmNetworkId id, String address) {
+    final a = address.startsWith('0x') ? address : '0x$address';
+    switch (flavor) {
+      case EvmDeployFlavor.testnet:
+        return switch (id) {
+          EvmNetworkId.ethereum => 'https://sepolia.etherscan.io/address/$a',
+          EvmNetworkId.base => 'https://sepolia.basescan.org/address/$a',
+        };
+      case EvmDeployFlavor.mainnet:
+        return switch (id) {
+          EvmNetworkId.ethereum => 'https://etherscan.io/address/$a',
+          EvmNetworkId.base => 'https://basescan.org/address/$a',
         };
     }
   }
