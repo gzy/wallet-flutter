@@ -10,6 +10,7 @@ import '../models/stored_wallet.dart';
 import '../config/evm_environment.dart';
 import '../services/evm/evm_client.dart';
 import '../services/evm/send_service.dart';
+import '../services/evm/transfer_fee_service.dart';
 import '../services/evm/token_service.dart';
 import '../services/market/app_price_service.dart';
 import '../services/wallet/hd_wallet_service.dart';
@@ -456,10 +457,34 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  /// 估算当前原生转账矿工费（EIP-1559 优先，失败则 legacy gasPrice）。
+  Future<NativeTransferFeeQuote> quoteNativeTransfer({
+    required EvmNetworkId network,
+    required String toHex,
+    required String amountEther,
+  }) async {
+    final f = address;
+    if (f == null) {
+      throw StateError('No wallet');
+    }
+    final cleaned = toHex.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
+    final to = EthereumAddress.fromHex(cleaned);
+    return quoteNativeTransferForNetwork(
+      network: network,
+      from: f,
+      to: to,
+      amountEther: amountEther,
+    );
+  }
+
   Future<String> sendEth({
     required EvmNetworkId network,
     required String toHex,
     required String amountEther,
+    int? maxGas,
+    EtherAmount? gasPrice,
+    EtherAmount? maxFeePerGas,
+    EtherAmount? maxPriorityFeePerGas,
   }) async {
     final c = _credentials;
     if (c == null) {
@@ -470,6 +495,10 @@ class WalletController extends ChangeNotifier {
       credentials: c,
       toHex: toHex,
       amountEther: amountEther,
+      maxGas: maxGas,
+      gasPrice: gasPrice,
+      maxFeePerGas: maxFeePerGas,
+      maxPriorityFeePerGas: maxPriorityFeePerGas,
     );
   }
 

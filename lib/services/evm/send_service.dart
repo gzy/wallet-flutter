@@ -39,6 +39,10 @@ class SendService {
     required EthPrivateKey credentials,
     required String toHex,
     required String amountEther,
+    int? maxGas,
+    EtherAmount? gasPrice,
+    EtherAmount? maxFeePerGas,
+    EtherAmount? maxPriorityFeePerGas,
   }) async {
     final client = EvmRpcPool.client(network);
     final cleaned = _normalizeRecipientHex(toHex);
@@ -48,11 +52,20 @@ class SendService {
       throw StateError('收款地址与当前钱包相同，无法向自己转账；请粘贴对方的钱包地址。');
     }
     final wei = _etherDecimalStringToWei(amountEther);
+    final is1559 = maxFeePerGas != null && maxPriorityFeePerGas != null;
+    final isLegacy = gasPrice != null;
+    if (is1559 && isLegacy) {
+      throw ArgumentError('不能同时指定 EIP-1559 与 legacy gasPrice');
+    }
     return client.sendTransaction(
       credentials,
       Transaction(
         to: to,
         value: EtherAmount.inWei(wei),
+        maxGas: maxGas,
+        gasPrice: is1559 ? null : gasPrice,
+        maxFeePerGas: maxFeePerGas,
+        maxPriorityFeePerGas: maxPriorityFeePerGas,
       ),
       chainId: network.chainId,
     );

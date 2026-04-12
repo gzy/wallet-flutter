@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,8 +8,10 @@ import 'package:web3dart/web3dart.dart';
 import '../config/evm_environment.dart';
 import '../models/evm_network.dart';
 import '../providers/wallet_controller.dart';
+import '../services/evm/transfer_fee_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/pin_verify_sheet.dart';
+import 'address_book_screen.dart';
 
 /// 将 RPC 限流、非 JSON 响应等转成可读提示（避免整段 FormatException 糊脸）。
 String _mapTransferSendError(Object e) {
@@ -44,6 +48,9 @@ class _TokenItem {
   final String symbol;
   final String network;
   final double balance;
+
+  /// 行情 USD 单价（如 ETH 美元价）；无行情时为 0。
+  final double priceUsd;
   final Color color;
   final String mark;
   final EvmNetworkId evmNetwork;
@@ -51,6 +58,7 @@ class _TokenItem {
     this.symbol,
     this.network,
     this.balance,
+    this.priceUsd,
     this.color,
     this.mark,
     this.evmNetwork,
@@ -68,10 +76,10 @@ class _TransferScreenState extends State<TransferScreen> {
   final TextEditingController _address = TextEditingController();
   final TextEditingController _amount = TextEditingController();
   final TextEditingController _usd = TextEditingController();
-  final TextEditingController _customGweiController = TextEditingController();
   int _selectedTokenIndex = 0;
-  String _gasLevel = '中';
-  double _customGwei = 0.040084;
+
+  /// 避免金额 ⇄ USD 互写时递归触发 [TextEditingController] 监听。
+  bool _syncingAmountUsd = false;
 
   static const _transferColors = {
     EvmNetworkId.ethereum: Color(0xFF3B82F6),
@@ -85,11 +93,13 @@ class _TransferScreenState extends State<TransferScreen> {
   List<_TokenItem> _tokensFor(WalletController w) {
     return EvmEnvironment.nativeCoins.map((cfg) {
       var bal = 0.0;
+      var priceUsd = 0.0;
       final cid = EvmEnvironment.chainId(cfg.networkKey);
       if (w.hasWallet) {
         for (final c in w.evmCoins) {
           if (c.chainId == cid) {
             bal = c.balance;
+            priceUsd = c.price;
             break;
           }
         }
@@ -98,6 +108,7 @@ class _TransferScreenState extends State<TransferScreen> {
         cfg.symbol,
         cfg.networkLabel,
         bal,
+        priceUsd,
         _transferColors[cfg.networkKey]!,
         _transferMarks[cfg.networkKey]!,
         cfg.networkKey,
@@ -105,15 +116,96 @@ class _TransferScreenState extends State<TransferScreen> {
     }).toList();
   }
 
+  double _unitUsdPrice(WalletController w) {
+    final tokens = _tokensFor(w);
+    if (tokens.isEmpty) {
+      return 0;
+    }
+    return _selectedToken(tokens).priceUsd;
+  }
+
+  void _syncUsdFromAmount(WalletController w) {
+    if (_syncingAmountUsd || !mounted) {
+      return;
+    }
+    final price = _unitUsdPrice(w);
+    if (price <= 0) {
+      return;
+    }
+    final raw = _amount.text.trim();
+    if (raw.isEmpty) {
+      _syncingAmountUsd = true;
+      _usd.clear();
+      _syncingAmountUsd = false;
+      return;
+    }
+    final ether = double.tryParse(raw);
+    if (ether == null) {
+      return;
+    }
+    _syncingAmountUsd = true;
+    _usd.text = (ether * price).toStringAsFixed(2);
+    _syncingAmountUsd = false;
+  }
+
+  void _syncAmountFromUsd(WalletController w) {
+    if (_syncingAmountUsd || !mounted) {
+      return;
+    }
+    final price = _unitUsdPrice(w);
+    if (price <= 0) {
+      return;
+    }
+    final raw = _usd.text.trim();
+    if (raw.isEmpty) {
+      _syncingAmountUsd = true;
+      _amount.clear();
+      _syncingAmountUsd = false;
+      return;
+    }
+    final usd = double.tryParse(raw);
+    if (usd == null) {
+      return;
+    }
+    final ether = usd / price;
+    _syncingAmountUsd = true;
+    var s = ether.toStringAsFixed(8);
+    s = s.replaceFirst(RegExp(r'\.?0+$'), '');
+    _amount.text = s.isEmpty ? '0' : s;
+    _syncingAmountUsd = false;
+  }
+
+  void _onAmountFieldChanged() {
+    if (!mounted) {
+      return;
+    }
+    _syncUsdFromAmount(context.read<WalletController>());
+  }
+
+  void _onUsdFieldChanged() {
+    if (!mounted) {
+      return;
+    }
+    _syncAmountFromUsd(context.read<WalletController>());
+  }
+
   _TokenItem _selectedToken(List<_TokenItem> tokens) =>
       tokens[_selectedTokenIndex.clamp(0, tokens.length - 1)];
 
   @override
+  void initState() {
+    super.initState();
+    _amount.addListener(_onAmountFieldChanged);
+    _usd.addListener(_onUsdFieldChanged);
+  }
+
+  @override
   void dispose() {
+    _amount.removeListener(_onAmountFieldChanged);
+    _usd.removeListener(_onUsdFieldChanged);
     _address.dispose();
     _amount.dispose();
     _usd.dispose();
-    _customGweiController.dispose();
     super.dispose();
   }
 
@@ -219,19 +311,44 @@ class _TransferScreenState extends State<TransferScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              const Row(
+              Row(
                 children: [
-                  Text('收款地址', style: TextStyle(fontSize: 18)),
-                  Spacer(),
-                  Icon(Icons.perm_contact_calendar_outlined,
-                      size: 20, color: AppColors.textSecondary),
-                  SizedBox(width: 12),
-                  SizedBox(
+                  const Text('收款地址', style: TextStyle(fontSize: 18)),
+                  const Spacer(),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    icon: const Icon(Icons.perm_contact_calendar_outlined,
+                        size: 20, color: AppColors.textSecondary),
+                    onPressed: () async {
+                      final picked = await Navigator.of(context).push<String>(
+                        MaterialPageRoute<String>(
+                          builder: (_) => AddressBookScreen(
+                            symbol: sel.symbol,
+                            networkLabel: sel.network,
+                          ),
+                        ),
+                      );
+                      if (picked != null && picked.trim().isNotEmpty && mounted) {
+                        setState(() => _address.text = picked.trim());
+                      }
+                    },
+                  ),
+                  const SizedBox(
                       height: 18,
                       child: VerticalDivider(color: AppColors.borderSoft)),
-                  SizedBox(width: 12),
-                  Icon(Icons.fullscreen,
-                      size: 20, color: AppColors.textSecondary),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    icon: const Icon(Icons.fullscreen,
+                        size: 20, color: AppColors.textSecondary),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('全屏输入功能开发中')),
+                      );
+                    },
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
@@ -470,6 +587,9 @@ class _TransferScreenState extends State<TransferScreen> {
         _selectedTokenIndex = tokens.indexOf(token);
         if (_selectedTokenIndex < 0) _selectedTokenIndex = 0;
       });
+      if (mounted) {
+        _syncUsdFromAmount(context.read<WalletController>());
+      }
     }
   }
 
@@ -518,191 +638,16 @@ class _TransferScreenState extends State<TransferScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('转账', style: TextStyle(fontSize: 18)),
-                    const SizedBox(height: 14),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF222226),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          const CircleAvatar(
-                            radius: 24,
-                            backgroundColor: Color(0xFF2A2A2E),
-                            child: Text('🪙'),
-                          ),
-                          const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${_amount.text} ${sel.symbol}',
-                                style: const TextStyle(
-                                  color: AppColors.textPrimary,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                sel.network,
-                                style: const TextStyle(
-                                    color: AppColors.textSecondary),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _confirmCard(
-                      children: [
-                        _kvRow('付款地址', fromShort),
-                        const SizedBox(height: 10),
-                        _kvRow('收款地址', _address.text, rightIsAddress: true),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    _confirmCard(
-                      children: [
-                        _kvRow('矿工费', _gasFeeText(sel.evmNetwork)),
-                        const SizedBox(height: 10),
-                        _kvRow('支付方式', 'ETH(${sel.network})'),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            _gasOption('低', '<\$0.01', '0.0240504 Gwei',
-                                setSheetState),
-                            _gasOption(
-                                '中', '<\$0.01', '0.040084 Gwei', setSheetState),
-                            _gasOption('高', '<\$0.01', '0.0440924 Gwei',
-                                setSheetState),
-                            _gasOption(
-                              '自定义',
-                              '',
-                              '${_customGwei.toStringAsFixed(6)} Gwei',
-                              setSheetState,
-                              isCustom: true,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SizedBox(
-                            height: 48,
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(context),
-                              style: OutlinedButton.styleFrom(
-                                side:
-                                    const BorderSide(color: Color(0xFF5A5A5A)),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              child: const Text('取消'),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: SizedBox(
-                            height: 48,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  begin: Alignment.centerLeft,
-                                  end: Alignment.centerRight,
-                                  colors: [
-                                    AppColors.accentStart,
-                                    AppColors.accentEnd
-                                  ],
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(12),
-                                  onTap: () async {
-                                    Navigator.pop(context);
-                                    final messenger =
-                                        ScaffoldMessenger.of(this.context);
-                                    final amountStr = _amount.text.trim();
-                                    final amount = double.tryParse(amountStr);
-                                    if (amount == null || amount <= 0) {
-                                      messenger.showSnackBar(const SnackBar(
-                                          content: Text('金额无效')));
-                                      return;
-                                    }
-                                    // 每次转账都要求输入 PIN（会话解锁不等同于授权转账）
-                                    final ok = await PinVerifySheet.show(
-                                      this.context,
-                                      title: '确认转账',
-                                      subtitle: '请输入 6 位 PIN 以授权本次转账。',
-                                      verify: (pin) => this
-                                          .context
-                                          .read<WalletController>()
-                                          .verifyTransactionPin(pin),
-                                    );
-                                    if (ok != true) {
-                                      messenger.showSnackBar(const SnackBar(
-                                          content: Text('已取消或 PIN 未通过')));
-                                      return;
-                                    }
-                                    try {
-                                      final hash = await wallet.sendEth(
-                                        network: sel.evmNetwork,
-                                        toHex: _normalizeAddrField(_address.text),
-                                        amountEther: amountStr,
-                                      );
-                                      messenger.showSnackBar(
-                                        SnackBar(content: Text('已广播: $hash')),
-                                      );
-                                      await wallet.refreshBalances();
-                                    } catch (e) {
-                                      messenger.showSnackBar(
-                                        SnackBar(
-                                            content:
-                                                Text(_mapTransferSendError(e))),
-                                      );
-                                    }
-                                  },
-                                  child: const Center(
-                                    child: Text(
-                                      '转出',
-                                      style: TextStyle(
-                                        color: AppColors.accentText,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
+      builder: (sheetContext) {
+        return _TransferConfirmSheet(
+          hostContext: context,
+          sheetContext: sheetContext,
+          wallet: wallet,
+          sel: sel,
+          fromShort: fromShort,
+          amountStr: _amount.text.trim(),
+          recipientDisplay: _address.text,
+          toHexNormalized: toNorm,
         );
       },
     );
@@ -719,160 +664,6 @@ class _TransferScreenState extends State<TransferScreen> {
         ),
       ),
     );
-  }
-
-  Widget _confirmCard({required List<Widget> children}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF222226),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(children: children),
-    );
-  }
-
-  Widget _kvRow(String left, String right, {bool rightIsAddress = false}) {
-    return Row(
-      crossAxisAlignment:
-          rightIsAddress ? CrossAxisAlignment.start : CrossAxisAlignment.center,
-      children: [
-        Text(left, style: const TextStyle(color: AppColors.textSecondary)),
-        const Spacer(),
-        Flexible(
-          child: Text(
-            right,
-            maxLines: rightIsAddress ? 2 : 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.right,
-            style: const TextStyle(color: AppColors.textPrimary),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _gasOption(
-    String level,
-    String price,
-    String gwei,
-    void Function(void Function()) setSheetState, {
-    bool isCustom = false,
-  }) {
-    final isActive = _gasLevel == level;
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.only(right: 6),
-        child: InkWell(
-          onTap: () {
-            if (isCustom) {
-              _openCustomGasDialog(setSheetState);
-              return;
-            }
-            setSheetState(() => _gasLevel = level);
-            setState(() => _gasLevel = level);
-          },
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-            decoration: BoxDecoration(
-              color:
-                  isActive ? const Color(0xFF2F2F36) : const Color(0xFF1B1B1F),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: isActive ? AppColors.accent : const Color(0xFF505050),
-              ),
-            ),
-            child: Column(
-              children: [
-                Text(level, style: const TextStyle(fontSize: 12)),
-                if (!isCustom) ...[
-                  const SizedBox(height: 2),
-                  Text(price,
-                      style: const TextStyle(
-                          fontSize: 10, color: AppColors.success)),
-                  Text(gwei,
-                      style: const TextStyle(
-                          fontSize: 9, color: AppColors.textSecondary)),
-                ] else ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    gwei,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 9, color: AppColors.textSecondary),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _gasFeeText(EvmNetworkId net) {
-    final netLabel = net == EvmNetworkId.ethereum ? 'Ethereum' : 'Base';
-    if (_gasLevel == '低') return '约 0.000000505 ETH ($netLabel，估算)';
-    if (_gasLevel == '中') return '约 0.000000842 ETH ($netLabel，估算)';
-    if (_gasLevel == '高') return '约 0.000001009 ETH ($netLabel，估算)';
-    final estimated = _customGwei * 0.000021;
-    return '${estimated.toStringAsFixed(9)} ETH ($netLabel，估算)';
-  }
-
-  Future<void> _openCustomGasDialog(
-    void Function(void Function()) setSheetState,
-  ) async {
-    _customGweiController.text = _customGwei.toStringAsFixed(6);
-    final value = await showDialog<double>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F23),
-          title: const Text('自定义 Gas (Gwei)'),
-          content: TextField(
-            controller: _customGweiController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              hintText: '例如 0.040084',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final parsed =
-                    double.tryParse(_customGweiController.text.trim());
-                if (parsed == null || parsed <= 0) {
-                  ScaffoldMessenger.of(this.context).showSnackBar(
-                    const SnackBar(content: Text('请输入有效的 Gwei 数值')),
-                  );
-                  return;
-                }
-                Navigator.pop(context, parsed);
-              },
-              child: const Text('确认'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (value != null) {
-      setSheetState(() {
-        _gasLevel = '自定义';
-      });
-      setState(() {
-        _gasLevel = '自定义';
-        _customGwei = value;
-      });
-    }
   }
 
   Widget _box({required Widget child}) {
@@ -914,14 +705,26 @@ class _TransferScreenState extends State<TransferScreen> {
             ),
           ),
           if (withMax)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              margin: const EdgeInsets.only(right: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.borderSoft),
+            InkWell(
+              onTap: () {
+                final w = context.read<WalletController>();
+                final tokens = _tokensFor(w);
+                final sel = _selectedToken(tokens);
+                final b = sel.balance;
+                _amount.text = b == 0 ? '0' : b.toStringAsFixed(8).replaceFirst(RegExp(r'\.?0+$'), '');
+                _syncUsdFromAmount(w);
+                setState(() {});
+              },
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.borderSoft),
+                ),
+                child: const Text('全部', style: TextStyle(fontSize: 14)),
               ),
-              child: const Text('全部', style: TextStyle(fontSize: 14)),
             ),
           if (suffix != null)
             Text(suffix,
@@ -940,6 +743,473 @@ class _TransferScreenState extends State<TransferScreen> {
                   style: TextStyle(color: Color(0xFF22D3AA), fontSize: 18)),
             ),
         ],
+      ),
+    );
+  }
+}
+
+Widget _transferConfirmCard({required List<Widget> children}) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFF222226),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(children: children),
+  );
+}
+
+Widget _transferKvRow(String left, String right, {bool rightIsAddress = false}) {
+  return Row(
+    crossAxisAlignment:
+        rightIsAddress ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+    children: [
+      Text(left, style: const TextStyle(color: AppColors.textSecondary)),
+      const Spacer(),
+      Flexible(
+        child: Text(
+          right,
+          maxLines: rightIsAddress ? 2 : 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.right,
+          style: const TextStyle(color: AppColors.textPrimary),
+        ),
+      ),
+    ],
+  );
+}
+
+class _TransferConfirmSheet extends StatefulWidget {
+  const _TransferConfirmSheet({
+    required this.hostContext,
+    required this.sheetContext,
+    required this.wallet,
+    required this.sel,
+    required this.fromShort,
+    required this.amountStr,
+    required this.recipientDisplay,
+    required this.toHexNormalized,
+  });
+
+  final BuildContext hostContext;
+  final BuildContext sheetContext;
+  final WalletController wallet;
+  final _TokenItem sel;
+  final String fromShort;
+  final String amountStr;
+  final String recipientDisplay;
+  final String toHexNormalized;
+
+  @override
+  State<_TransferConfirmSheet> createState() => _TransferConfirmSheetState();
+}
+
+class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
+  static const _gasQuoteRefreshInterval = Duration(seconds: 15);
+
+  Timer? _gasRefreshTimer;
+  String _gasLevel = '中';
+  double _customGwei = 1;
+  final TextEditingController _customGweiController = TextEditingController();
+
+  bool _quoteLoading = true;
+  NativeTransferFeeQuote? _resolvedQuote;
+
+  /// [isInitial]：首次打开显示「正在估算」；定时静默刷新不改变加载态，失败时保留上一次报价。
+  Future<NativeTransferFeeQuote?> _fetchQuote({required bool isInitial}) async {
+    if (!mounted) {
+      return _resolvedQuote;
+    }
+    if (isInitial) {
+      setState(() => _quoteLoading = true);
+    }
+    try {
+      final q = await widget.wallet.quoteNativeTransfer(
+        network: widget.sel.evmNetwork,
+        toHex: widget.toHexNormalized,
+        amountEther: widget.amountStr,
+      );
+      if (!mounted) {
+        return q;
+      }
+      final medGwei = EtherAmount.inWei(
+        q.isEip1559 ? q.tipMedWei : (q.legacyGasPriceWei ?? q.tipMedWei),
+      ).getValueInUnit(EtherUnit.gwei);
+      setState(() {
+        _resolvedQuote = q;
+        _quoteLoading = false;
+        if (_gasLevel != '自定义' && medGwei > 0) {
+          _customGwei = medGwei;
+        }
+      });
+      return q;
+    } catch (_) {
+      if (!mounted) {
+        return _resolvedQuote;
+      }
+      setState(() {
+        _quoteLoading = false;
+        if (isInitial) {
+          _resolvedQuote = null;
+        }
+      });
+      return _resolvedQuote;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_fetchQuote(isInitial: true));
+    _gasRefreshTimer = Timer.periodic(_gasQuoteRefreshInterval, (_) {
+      unawaited(_fetchQuote(isInitial: false));
+    });
+  }
+
+  @override
+  void dispose() {
+    _gasRefreshTimer?.cancel();
+    _customGweiController.dispose();
+    super.dispose();
+  }
+
+  BigInt get _customTipWei {
+    final s = _customGwei.toStringAsFixed(9);
+    return EtherAmount.fromBase10String(EtherUnit.gwei, s).getInWei;
+  }
+
+  String _gasFeeTitle(NativeTransferFeeQuote? quote) {
+    if (_quoteLoading) {
+      return '正在从节点估算…';
+    }
+    if (quote == null) {
+      return '估算失败，转出时将使用节点默认价';
+    }
+    final eth = quote.approxMaxEthForLevel(_gasLevel, _customTipWei);
+    return '约 ${eth.toStringAsFixed(9)} ETH（${widget.sel.network}，上限）';
+  }
+
+  String _usdForLevel(NativeTransferFeeQuote? quote, String level) {
+    if (quote == null || widget.sel.priceUsd <= 0) {
+      return '—';
+    }
+    final eth = quote.approxMaxEthForLevel(
+      level,
+      level == '自定义' ? _customTipWei : BigInt.zero,
+    );
+    final usd = eth * widget.sel.priceUsd;
+    if (usd < 0.01) {
+      return '<\$0.01';
+    }
+    return '\$${usd.toStringAsFixed(2)}';
+  }
+
+  Future<void> _openCustomGasDialog() async {
+    _customGweiController.text = _customGwei.toStringAsFixed(6);
+    final is1559 = _resolvedQuote?.isEip1559 ?? true;
+    final value = await showDialog<double>(
+      context: widget.sheetContext,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1F1F23),
+          title: Text(is1559 ? '自定义优先级费 (Gwei)' : '自定义 gasPrice (Gwei)'),
+          content: TextField(
+            controller: _customGweiController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              hintText: '例如 1.5',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final parsed =
+                    double.tryParse(_customGweiController.text.trim());
+                if (parsed == null || parsed <= 0) {
+                  ScaffoldMessenger.of(widget.hostContext).showSnackBar(
+                    const SnackBar(content: Text('请输入有效的 Gwei 数值')),
+                  );
+                  return;
+                }
+                Navigator.pop(context, parsed);
+              },
+              child: const Text('确认'),
+            ),
+          ],
+        );
+      },
+    );
+    if (value != null) {
+      setState(() {
+        _gasLevel = '自定义';
+        _customGwei = value;
+      });
+    }
+  }
+
+  Widget _gasOption(
+    NativeTransferFeeQuote? quote,
+    String level, {
+    bool isCustom = false,
+  }) {
+    final isActive = _gasLevel == level;
+    final gweiStr = quote == null
+        ? '—'
+        : quote.gweiLabelForLevel(
+            level,
+            isCustom ? _customTipWei : BigInt.zero,
+          );
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: InkWell(
+          onTap: _quoteLoading
+              ? null
+              : () {
+                  if (isCustom) {
+                    _openCustomGasDialog();
+                    return;
+                  }
+                  setState(() => _gasLevel = level);
+                },
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            height: 72,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            decoration: BoxDecoration(
+              color:
+                  isActive ? const Color(0xFF2F2F36) : const Color(0xFF1B1B1F),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isActive ? AppColors.accent : const Color(0xFF505050),
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(level, style: const TextStyle(fontSize: 12)),
+                const SizedBox(height: 2),
+                Text(
+                  _usdForLevel(quote, level),
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: AppColors.success,
+                  ),
+                ),
+                Text(
+                  gweiStr,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final quote = _resolvedQuote;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('转账', style: TextStyle(fontSize: 18)),
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF222226),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 24,
+                    backgroundColor: Color(0xFF2A2A2E),
+                    child: Text('🪙'),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${widget.amountStr} ${widget.sel.symbol}',
+                        style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        widget.sel.network,
+                        style: const TextStyle(color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            _transferConfirmCard(
+              children: [
+                _transferKvRow('付款地址', widget.fromShort),
+                const SizedBox(height: 10),
+                _transferKvRow(
+                  '收款地址',
+                  widget.recipientDisplay,
+                  rightIsAddress: true,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _transferConfirmCard(
+              children: [
+                _transferKvRow('矿工费', _gasFeeTitle(quote)),
+                const SizedBox(height: 10),
+                _transferKvRow('支付方式', 'ETH(${widget.sel.network})'),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _gasOption(quote, '低'),
+                    _gasOption(quote, '中'),
+                    _gasOption(quote, '高'),
+                    _gasOption(quote, '自定义', isCustom: true),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 48,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(widget.sheetContext),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFF5A5A5A)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('取消'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Opacity(
+                    opacity: _quoteLoading ? 0.42 : 1,
+                    child: SizedBox(
+                      height: 48,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              AppColors.accentStart,
+                              AppColors.accentEnd,
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _quoteLoading
+                                ? null
+                                : () async {
+                            Navigator.pop(widget.sheetContext);
+                            final messenger =
+                                ScaffoldMessenger.of(widget.hostContext);
+                            final amountStr = widget.amountStr;
+                            final amount = double.tryParse(amountStr);
+                            if (amount == null || amount <= 0) {
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('金额无效')),
+                              );
+                              return;
+                            }
+                            final ok = await PinVerifySheet.show(
+                              widget.hostContext,
+                              title: '确认转账',
+                              subtitle: '请输入 6 位 PIN 以授权本次转账。',
+                              verify: (pin) => widget.hostContext
+                                  .read<WalletController>()
+                                  .verifyTransactionPin(pin),
+                            );
+                            if (ok != true) {
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('已取消或 PIN 未通过')),
+                              );
+                              return;
+                            }
+                            NativeTransferFeeQuote? q = _resolvedQuote;
+                            q ??= await _fetchQuote(isInitial: false);
+                            final tp = q?.transactionParams(
+                              gasLevel: _gasLevel,
+                              customPriorityWei: _customTipWei,
+                            );
+                            try {
+                              final hash = await widget.wallet.sendEth(
+                                network: widget.sel.evmNetwork,
+                                toHex: widget.toHexNormalized,
+                                amountEther: amountStr,
+                                maxGas: tp?.maxGas,
+                                gasPrice: tp?.gasPrice,
+                                maxFeePerGas: tp?.maxFeePerGas,
+                                maxPriorityFeePerGas: tp?.maxPriorityFeePerGas,
+                              );
+                              messenger.showSnackBar(
+                                SnackBar(content: Text('已广播: $hash')),
+                              );
+                              await widget.wallet.refreshBalances();
+                            } catch (e) {
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text(_mapTransferSendError(e)),
+                                ),
+                              );
+                            }
+                          },
+                            child: const Center(
+                              child: Text(
+                                '转出',
+                                style: TextStyle(
+                                  color: AppColors.accentText,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
