@@ -6,7 +6,10 @@ import '../../theme/app_colors.dart';
 import 'mnemonic_verify_screen.dart';
 
 class MnemonicShowScreen extends StatelessWidget {
-  const MnemonicShowScreen({super.key});
+  const MnemonicShowScreen({super.key, this.reviewOnly = false});
+
+  /// 已备份用户仅查看助记词：底部为「完成」并返回，不再进入顺序验证页。
+  final bool reviewOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -172,6 +175,10 @@ class MnemonicShowScreen extends StatelessWidget {
                     height: 52,
                     child: FilledButton(
                       onPressed: () {
+                        if (reviewOnly) {
+                          Navigator.of(context).pop();
+                          return;
+                        }
                         Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const MnemonicVerifyScreen()),
@@ -183,8 +190,10 @@ class MnemonicShowScreen extends StatelessWidget {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14)),
                       ),
-                      child: const Text('下一步',
-                          style: TextStyle(fontWeight: FontWeight.w800)),
+                      child: Text(
+                        reviewOnly ? '完成' : '下一步',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
                   ),
                 ),

@@ -116,8 +116,13 @@ class _WalletScreenState extends State<WalletScreen> {
               },
             ),
             Expanded(
-              child: CustomScrollView(
-                slivers: [
+              child: RefreshIndicator(
+                color: AppColors.accent,
+                onRefresh: () =>
+                    context.read<WalletController>().refreshWalletHome(),
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
                   SliverToBoxAdapter(
                     child: WalletBalanceSection(
                       isBalanceVisible: _isBalanceVisible,
@@ -165,6 +170,7 @@ class _WalletScreenState extends State<WalletScreen> {
                   const SliverToBoxAdapter(child: SizedBox(height: 6)),
                   WalletCoinList(coins: filteredCoins),
                 ],
+                ),
               ),
             ),
           ],

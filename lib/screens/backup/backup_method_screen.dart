@@ -1,7 +1,12 @@
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/wallet_controller.dart';
 import '../../theme/app_colors.dart';
+import '../../widgets/pin_verify_sheet.dart';
 import 'backup_password_screen.dart';
+import 'mnemonic_show_screen.dart';
 
 class BackupMethodScreen extends StatelessWidget {
   const BackupMethodScreen({super.key});
@@ -12,6 +17,8 @@ class BackupMethodScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final manualBackedUp = context.watch<WalletController>().backedUp;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -60,8 +67,8 @@ class BackupMethodScreen extends StatelessWidget {
                     _MethodTile(
                       icon: Icons.cloud_outlined,
                       title: '备份到 iCloud',
-                      subtitle: '把备份文件保存到 iCloud（开发中）。',
-                      trailingDisabled: true,
+                      subtitle: '把备份文件保存到 iCloud。',
+                      isBackupComplete: false,
                       onTap: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('iCloud 备份流程暂未接入')),
@@ -74,12 +81,8 @@ class BackupMethodScreen extends StatelessWidget {
                     icon: Icons.description_outlined,
                     title: '手动备份',
                     subtitle: '自己保管助记词。',
-                    trailingDisabled: true,
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const BackupPasswordScreen()),
-                      );
-                    },
+                    isBackupComplete: manualBackedUp,
+                    onTap: () => _openManualBackup(context, manualBackedUp),
                   ),
                 ],
               ),
@@ -99,20 +102,50 @@ class BackupMethodScreen extends StatelessWidget {
   }
 }
 
+/// 未备份：进入设置备份密码与首次展示流程；已备份：先验 PIN 再直接进入助记词页。
+Future<void> _openManualBackup(BuildContext context, bool manualBackedUp) async {
+  if (!manualBackedUp) {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const BackupPasswordScreen()),
+    );
+    return;
+  }
+  final wc = context.read<WalletController>();
+  final ok = await PinVerifySheet.show(
+    context,
+    title: '验证 PIN',
+    subtitle: '请输入 6 位 PIN 以查看助记词。',
+    verify: wc.verifyTransactionPin,
+  );
+  if (!context.mounted || ok != true) {
+    return;
+  }
+  await Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => const MnemonicShowScreen(reviewOnly: true),
+    ),
+  );
+}
+
 class _MethodTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
-  final bool trailingDisabled;
+
+  /// 是否已完成该方式的备份（手动备份与 [WalletController.backedUp] 同步；iCloud 未接入时为 false）。
+  final bool isBackupComplete;
   final VoidCallback onTap;
 
   const _MethodTile({
     required this.icon,
     required this.title,
     required this.subtitle,
-    required this.trailingDisabled,
+    required this.isBackupComplete,
     required this.onTap,
   });
+
+  static const Color _completeGreen = Color(0xFF34C759);
+  static const Color _incompleteRed = Color(0xFFFF3B30);
 
   @override
   Widget build(BuildContext context) {
@@ -139,9 +172,33 @@ class _MethodTile extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.close, color: trailingDisabled ? Colors.red : AppColors.textSecondary, size: 18),
+            _BackupStatusDot(complete: isBackupComplete),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 与参考设计一致：已完成为绿底白勾，未完成为红底白叉。
+class _BackupStatusDot extends StatelessWidget {
+  const _BackupStatusDot({required this.complete});
+
+  final bool complete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        color: complete ? _MethodTile._completeGreen : _MethodTile._incompleteRed,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        complete ? Icons.check : Icons.close,
+        color: Colors.white,
+        size: 14,
       ),
     );
   }

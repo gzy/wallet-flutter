@@ -11,6 +11,7 @@ import '../config/evm_environment.dart';
 import '../services/evm/evm_client.dart';
 import '../services/evm/send_service.dart';
 import '../services/evm/token_service.dart';
+import '../services/market/app_price_service.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
@@ -21,13 +22,16 @@ class WalletController extends ChangeNotifier {
     SecureStorageService? storage,
     TokenService? tokenService,
     SendService? sendService,
+    AppPriceService? appPriceService,
   })  : _storage = storage ?? SecureStorageService(),
         _tokenService = tokenService ?? TokenService(),
-        _sendService = sendService ?? SendService();
+        _sendService = sendService ?? SendService(),
+        _appPriceService = appPriceService ?? AppPriceService();
 
   final SecureStorageService _storage;
   final TokenService _tokenService;
   final SendService _sendService;
+  final AppPriceService _appPriceService;
 
   static const _uuid = Uuid();
 
@@ -79,6 +83,7 @@ class WalletController extends ChangeNotifier {
     try {
       _pinEnabled = await _storage.hasPin();
       _wallets = await _storage.readWalletList();
+      await _reconcileBackedUpFromLegacyKeys();
       _activeWalletId = await _storage.getActiveWalletId();
       if (_activeWalletId == null && _wallets.isNotEmpty) {
         _activeWalletId = _wallets.first.id;
@@ -98,6 +103,25 @@ class WalletController extends ChangeNotifier {
     }
     if (_credentials != null) {
       unawaited(refreshBalances());
+    }
+  }
+
+  /// 历史版本 [markBackedUp] 只写了 `wallet_backed_up__` 未写钱包列表 JSON，重启后列表里仍为未备份。
+  /// 启动时若独立 key 为已备份则合并进列表并持久化。
+  Future<void> _reconcileBackedUpFromLegacyKeys() async {
+    var dirty = false;
+    final next = <StoredWallet>[];
+    for (final w in _wallets) {
+      if (!w.backedUp && await _storage.readBackedUpForWallet(w.id)) {
+        next.add(w.copyWith(backedUp: true));
+        dirty = true;
+      } else {
+        next.add(w);
+      }
+    }
+    if (dirty) {
+      _wallets = next;
+      await _storage.writeWalletList(_wallets);
     }
   }
 
@@ -358,6 +382,7 @@ class WalletController extends ChangeNotifier {
     _wallets = _wallets
         .map((w) => w.id == id ? w.copyWith(backedUp: true) : w)
         .toList();
+    await _storage.writeWalletList(_wallets);
     _backedUp = true;
     notifyListeners();
   }
@@ -370,10 +395,15 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
     try {
       final addr = _credentials!.address;
+      final quotes = await _appPriceService.fetchAllPrices();
       final coins = <CoinData>[];
       for (final cfg in EvmEnvironment.nativeCoins) {
         final bal =
             await _tokenService.getEthBalanceEther(cfg.networkKey, addr);
+        final pair = AppPriceService.usdtPairKeyForSymbol(cfg.symbol);
+        final q = quotes[pair];
+        final price = q?.price ?? 0;
+        final change = q?.change24h ?? 0;
         coins.add(
           CoinData(
             id: cfg.coinListId,
@@ -382,10 +412,10 @@ class WalletController extends ChangeNotifier {
             icon: cfg.icon,
             network: cfg.networkLabel,
             chainId: EvmEnvironment.chainId(cfg.networkKey),
-            price: 0,
-            priceChange24h: 0,
+            price: price,
+            priceChange24h: change,
             balance: bal,
-            balanceUSD: 0,
+            balanceUSD: bal * price,
           ),
         );
       }
@@ -394,6 +424,34 @@ class WalletController extends ChangeNotifier {
       debugPrint('refreshBalances: $e\n$st');
     } finally {
       _loading = false;
+      notifyListeners();
+    }
+  }
+
+  /// 首页下拉刷新：重读钱包列表与当前选中钱包，并刷新链上余额与行情。
+  Future<void> refreshWalletHome() async {
+    try {
+      _wallets = await _storage.readWalletList();
+      await _reconcileBackedUpFromLegacyKeys();
+      _activeWalletId = await _storage.getActiveWalletId();
+      if (_activeWalletId != null &&
+          !_wallets.any((w) => w.id == _activeWalletId)) {
+        _activeWalletId = null;
+        await _storage.clearActiveWalletId();
+      }
+      if (_activeWalletId == null && _wallets.isNotEmpty) {
+        _activeWalletId = _wallets.first.id;
+        await _storage.setActiveWalletId(_activeWalletId!);
+      }
+      await _loadCredentialsFromActiveMnemonic();
+      if (_credentials != null) {
+        await refreshBalances();
+      } else {
+        _evmCoins = [];
+        notifyListeners();
+      }
+    } catch (e, st) {
+      debugPrint('refreshWalletHome: $e\n$st');
       notifyListeners();
     }
   }
