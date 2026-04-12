@@ -9,6 +9,10 @@ import 'screens/explore_screen.dart';
 import 'screens/flash_screen.dart';
 import 'screens/trade_screen.dart';
 import 'screens/unlock_screen.dart';
+import 'screens/welcome_screen.dart';
+
+// 临时预览欢迎页：改为 false 即恢复正常（有钱包进主页、PIN 照常）。
+const bool _previewWelcome = false;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,6 +57,30 @@ class WalletApp extends StatelessWidget {
         ),
         splashFactory: NoSplash.splashFactory,
       ),
+      // 解锁层盖在整个 Navigator 之上，否则从首页 push 的详情页会挡住 _HomeShell 里的 UnlockScreen。
+      // 无钱包时不叠 PIN：否则欢迎页被挡住；且尚未有可保护资产时不必先解锁。
+      builder: (context, child) {
+        return Consumer<WalletController>(
+          builder: (context, w, _) {
+            if (child == null) return const SizedBox.shrink();
+            final needUnlock = w.initReady &&
+                w.hasWallet &&
+                w.pinEnabled &&
+                !w.sessionUnlocked &&
+                !_previewWelcome;
+            if (needUnlock) {
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  child,
+                  const Positioned.fill(child: UnlockScreen()),
+                ],
+              );
+            }
+            return child;
+          },
+        );
+      },
       home: const _HomeShell(),
     );
   }
@@ -73,8 +101,8 @@ class _HomeShell extends StatelessWidget {
             ),
           );
         }
-        if (w.pinEnabled && !w.sessionUnlocked) {
-          return const UnlockScreen();
+        if (!w.hasWallet || _previewWelcome) {
+          return const WelcomeScreen();
         }
         return const MainTabs();
       },
@@ -93,11 +121,15 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   static const List<_TabItem> _tabs = [
-    _TabItem(title: '钱包', icon: Icons.account_balance_wallet_outlined, page: WalletScreen()),
+    _TabItem(
+        title: '钱包',
+        icon: Icons.account_balance_wallet_outlined,
+        page: WalletScreen()),
     _TabItem(title: '市场', icon: Icons.bar_chart_outlined, page: MarketScreen()),
     _TabItem(title: '探索', icon: Icons.grid_view_rounded, page: ExploreScreen()),
     _TabItem(title: '闪兑', icon: Icons.repeat_rounded, page: FlashScreen()),
-    _TabItem(title: '交易', icon: Icons.compare_arrows_rounded, page: TradeScreen()),
+    _TabItem(
+        title: '交易', icon: Icons.compare_arrows_rounded, page: TradeScreen()),
   ];
 
   @override

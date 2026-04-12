@@ -1,5 +1,7 @@
 {
     // 运行和调试下拉框里选一项即可。EVM 主/测网由 --dart-define=EVM_FLAVOR=testnet|mainnet 控制（与 lib/config/evm_environment.dart 一致）。
+    // 模拟器 / 当前默认设备：「调试 | EVM …」；仅插 USB 真机时选「USB 真机 | …」（Android / iOS 共用同一组参数）。
+    // 打包 APK/AAB：命令面板「Tasks: Run Task」选「Android: APK/App Bundle（测试网|主网）」，见 .vscode/tasks.json（launch 仍是 flutter run）。
     //
     // iOS 26 真机 + Debug：DartWorker EXC_BAD_ACCESS (code=50) 多见 Xcode 26.4 LLDB（flutter/flutter#184254）；已换 Xcode 26.3 可优先用默认 LLDB。
     // 若仍崩：真机「Profile/Release」或模拟器 Debug；或 Xcode Settings → Components 重装 Device Support / Metal Toolchain。
@@ -18,7 +20,7 @@
             "args": ["--dart-define=EVM_FLAVOR=mainnet"]
         },
         {
-            "name": "iPhone USB | 测试网",
+            "name": "USB 真机 | 测试网",
             "request": "launch",
             "type": "dart",
             "args": [
@@ -30,7 +32,7 @@
             ]
         },
         {
-            "name": "iPhone USB | 主网",
+            "name": "USB 真机 | 主网",
             "request": "launch",
             "type": "dart",
             "args": [
@@ -42,7 +44,7 @@
             ]
         },
         {
-            "name": "iPhone USB | Profile | 测试网",
+            "name": "USB 真机 | Profile | 测试网",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
@@ -55,7 +57,7 @@
             ]
         },
         {
-            "name": "iPhone USB | Profile | 主网",
+            "name": "USB 真机 | Profile | 主网",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",

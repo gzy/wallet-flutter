@@ -179,8 +179,13 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: AppColors.accent,
+          indicatorSize: TabBarIndicatorSize.label,
+          dividerColor: AppColors.border,
+          dividerHeight: 1,
           labelColor: AppColors.textPrimary,
           unselectedLabelColor: AppColors.textMuted,
+          overlayColor: WidgetStateProperty.all(Colors.transparent),
+          splashFactory: NoSplash.splashFactory,
           tabs: const [
             Tab(text: '助记词'),
             Tab(text: '备份文件'),

@@ -7,13 +7,26 @@ import 'import_wallet_screen.dart';
 import 'wallet_ready_screen.dart';
 
 class AddWalletScreen extends StatefulWidget {
-  const AddWalletScreen({super.key});
+  const AddWalletScreen({super.key, this.openCreateDialogOnOpen = false});
+
+  /// 欢迎页「创建钱包」进入时自动弹出创建确认，减少一步。
+  final bool openCreateDialogOnOpen;
 
   @override
   State<AddWalletScreen> createState() => _AddWalletScreenState();
 }
 
 class _AddWalletScreenState extends State<AddWalletScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.openCreateDialogOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showCreateDialog();
+      });
+    }
+  }
+
   void _showCreateDialog() {
     showDialog<void>(
       context: context,

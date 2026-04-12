@@ -116,62 +116,89 @@ class _WalletScreenState extends State<WalletScreen> {
               },
             ),
             Expanded(
-              child: RefreshIndicator(
-                color: AppColors.accent,
-                onRefresh: () =>
-                    context.read<WalletController>().refreshWalletHome(),
-                child: CustomScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                  SliverToBoxAdapter(
-                    child: WalletBalanceSection(
-                      isBalanceVisible: _isBalanceVisible,
-                      totalBalance: totalBalance,
-                      totalBtcEquivalent: null,
-                      onToggleVisibility: () {
-                        setState(() {
-                          _isBalanceVisible = !_isBalanceVisible;
-                        });
-                      },
+              child: wallet.hasWallet && wallet.loading && coins.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppColors.accent),
+                    )
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        RefreshIndicator(
+                          color: AppColors.accent,
+                          onRefresh: () => context
+                              .read<WalletController>()
+                              .refreshWalletHome(),
+                          child: CustomScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            slivers: [
+                              SliverToBoxAdapter(
+                                child: WalletBalanceSection(
+                                  isBalanceVisible: _isBalanceVisible,
+                                  totalBalance: totalBalance,
+                                  totalBtcEquivalent: null,
+                                  onToggleVisibility: () {
+                                    setState(() {
+                                      _isBalanceVisible = !_isBalanceVisible;
+                                    });
+                                  },
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: WalletActionsRow(
+                                  onTransfer: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                          builder: (_) => const TransferScreen()),
+                                    );
+                                  },
+                                  onReceive: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                          builder: (_) => const ReceiveScreen()),
+                                    );
+                                  },
+                                  onBuy: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('买币功能开发中')),
+                                    );
+                                  },
+                                  onGas: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text('加油站功能开发中')),
+                                    );
+                                  },
+                                  onMore: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                          builder: (_) => const FlashScreen()),
+                                    );
+                                  },
+                                ),
+                              ),
+                              SliverToBoxAdapter(
+                                child: WalletSearchBar(controller: _searchController),
+                              ),
+                              const SliverToBoxAdapter(child: SizedBox(height: 6)),
+                              WalletCoinList(coins: filteredCoins),
+                            ],
+                          ),
+                        ),
+                        if (wallet.hasWallet && wallet.loading && coins.isNotEmpty)
+                          const Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: SizedBox(
+                              height: 3,
+                              child: LinearProgressIndicator(
+                                backgroundColor: AppColors.surface,
+                                color: AppColors.accent,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: WalletActionsRow(
-                      onTransfer: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const TransferScreen()),
-                        );
-                      },
-                      onReceive: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const ReceiveScreen()),
-                        );
-                      },
-                      onBuy: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('买币功能开发中')),
-                        );
-                      },
-                      onGas: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('加油站功能开发中')),
-                        );
-                      },
-                      onMore: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const FlashScreen()),
-                        );
-                      },
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: WalletSearchBar(controller: _searchController),
-                  ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 6)),
-                  WalletCoinList(coins: filteredCoins),
-                ],
-                ),
-              ),
             ),
           ],
         ),
