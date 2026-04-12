@@ -102,7 +102,8 @@ class WalletController extends ChangeNotifier {
       _initReady = true;
       notifyListeners();
     }
-    if (_credentials != null) {
+    // 已启用 PIN 且未解锁时不要在后台拉余额：会多次 notifyListeners，主线程在解锁层下仍重建整个 MainTabs。
+    if (_credentials != null && (!_pinEnabled || _sessionUnlocked)) {
       unawaited(refreshBalances());
     }
   }
@@ -363,6 +364,9 @@ class WalletController extends ChangeNotifier {
     if (r.ok) {
       _sessionUnlocked = true;
       notifyListeners();
+      if (_credentials != null) {
+        unawaited(refreshBalances());
+      }
     }
     return r;
   }

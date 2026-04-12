@@ -104,6 +104,13 @@ class _HomeShell extends StatelessWidget {
         if (!w.hasWallet || _previewWelcome) {
           return const WelcomeScreen();
         }
+        // PIN 未解锁时不挂载 MainTabs（IndexedStack 会同时保持 5 个 Tab 存活并重绘），解锁层由上层 Stack 提供。
+        if (w.pinEnabled && !w.sessionUnlocked) {
+          return const ColoredBox(
+            color: AppColors.background,
+            child: SizedBox.expand(),
+          );
+        }
         return const MainTabs();
       },
     );

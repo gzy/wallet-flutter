@@ -42,8 +42,7 @@ class AppPriceService {
     return inner;
   }
 
-  static Uri _allPricesUri() =>
-      Uri.parse('$kMarketApiBase/api/app/price/all');
+  static Uri _allPricesUri() => Uri.parse('$kMarketApiBase/api/app/price/all');
 
   /// 返回以交易对 key（如 `ETHUSDT`）为索引的报价；失败或 `code != 0` 时返回空 Map。
   Future<Map<String, AppSymbolQuote>> fetchAllPrices() async {
@@ -65,7 +64,8 @@ class AppPriceService {
         return {};
       }
       if (decoded['code'] != 0) {
-        debugPrint('AppPriceService: code=${decoded['code']} msg=${decoded['message']}');
+        debugPrint(
+            'AppPriceService: code=${decoded['code']} msg=${decoded['message']}');
         return {};
       }
 
