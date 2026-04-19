@@ -348,12 +348,26 @@ class _FlashScreenState extends State<FlashScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 12),
-              const Text('选择币种', style: TextStyle(fontSize: 16)),
+              const Text(
+                '选择币种',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
               const SizedBox(height: 8),
               ..._tokens.map(
                 (item) => ListTile(
                   onTap: () => Navigator.pop(context, item),
-                  title: Text('${item.$1} (${item.$2})'),
+                  title: Text(
+                    '${item.$1} (${item.$2})',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 8),

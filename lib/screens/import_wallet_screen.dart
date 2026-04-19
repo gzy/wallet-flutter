@@ -9,6 +9,7 @@ import '../providers/wallet_controller.dart';
 import '../services/wallet/local_backup_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/security_pin_bottom_sheet.dart';
 import 'wallet_ready_screen.dart';
 
 /// 导入钱包：双端统一交互
@@ -46,12 +47,14 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
   }
 
   Future<void> _openPinSheetWithPhrase(String phrase) async {
+    final setupMode = !context.read<WalletController>().pinEnabled;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.6),
-      builder: (sheetContext) => _PasswordSheet(
+      builder: (sheetContext) => SecurityPinBottomSheet(
+        setupMode: setupMode,
         onSubmit: (pin) async {
           final nav = Navigator.of(sheetContext);
           try {
@@ -74,6 +77,7 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
       ),
     );
   }
+
 
   Future<void> _submitMnemonicTab() async {
     final raw = _text.text.trim();
@@ -265,7 +269,7 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              '选择本应用「备份」流程生成的加密 JSON 文件，并输入当时设置的备份密码。解密成功后，再输入 6 位 PIN 完成导入。',
+              '选择本应用「备份」流程生成的加密 JSON 文件，并输入当时设置的备份密码。解密成功后，将引导设置或验证 6 位安全密码以完成导入。',
               style: TextStyle(
                   color: AppColors.textSecondary, fontSize: 14, height: 1.4),
             ),
@@ -325,196 +329,6 @@ class _ImportWalletScreenState extends State<ImportWalletScreen>
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PasswordSheet extends StatefulWidget {
-  const _PasswordSheet({required this.onSubmit});
-  final Future<void> Function(String pin) onSubmit;
-
-  @override
-  State<_PasswordSheet> createState() => _PasswordSheetState();
-}
-
-class _PasswordSheetState extends State<_PasswordSheet> {
-  String _pin = '';
-  bool _busy = false;
-
-  Future<void> _tap(String n) async {
-    if (_pin.length >= 6 || _busy) return;
-    setState(() => _pin = '$_pin$n');
-    if (_pin.length != 6) return;
-
-    setState(() => _busy = true);
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    if (!mounted) return;
-    try {
-      await widget.onSubmit(_pin);
-    } catch (_) {
-      setState(() {
-        _pin = '';
-        _busy = false;
-      });
-      return;
-    }
-    if (mounted) setState(() => _busy = false);
-  }
-
-  void _delete() {
-    if (_pin.isEmpty) return;
-    setState(() => _pin = _pin.substring(0, _pin.length - 1));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  const Spacer(),
-                  const Text(
-                    '请输入安全密码',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon:
-                        const Icon(Icons.close, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 18),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(6, (i) {
-                    final filled = i < _pin.length;
-                    return Container(
-                      width: 44,
-                      height: 44,
-                      margin: const EdgeInsets.symmetric(horizontal: 7),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: filled
-                              ? AppColors.textPrimary
-                              : AppColors.borderSoft,
-                          width: 2,
-                        ),
-                        color:
-                            filled ? AppColors.textPrimary : Colors.transparent,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: filled
-                          ? Center(
-                              child: Container(
-                                width: 10,
-                                height: 10,
-                                decoration: const BoxDecoration(
-                                  color: Colors.black,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            )
-                          : null,
-                    );
-                  }),
-                ),
-              ),
-              _KeyRow(keys: const ['1', '2', '3'], onTap: _tap),
-              const SizedBox(height: 10),
-              _KeyRow(keys: const ['4', '5', '6'], onTap: _tap),
-              const SizedBox(height: 10),
-              _KeyRow(keys: const ['7', '8', '9'], onTap: _tap),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const SizedBox(width: 88, height: 54),
-                  _KeyButton(label: '0', onTap: () => _tap('0')),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 88,
-                    height: 54,
-                    child: TextButton(
-                      onPressed: _delete,
-                      child: const Icon(Icons.backspace_outlined,
-                          color: AppColors.textPrimary),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _KeyRow extends StatelessWidget {
-  final List<String> keys;
-  final ValueChanged<String> onTap;
-  const _KeyRow({required this.keys, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        for (final k in keys) ...[
-          _KeyButton(label: k, onTap: () => onTap(k)),
-          if (k != keys.last) const SizedBox(width: 12),
-        ]
-      ],
-    );
-  }
-}
-
-class _KeyButton extends StatelessWidget {
-  final String label;
-  final VoidCallback onTap;
-  const _KeyButton({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 88,
-        height: 54,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceElevated,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
         ),
       ),
     );

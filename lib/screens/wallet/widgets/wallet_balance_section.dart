@@ -56,10 +56,6 @@ class WalletBalanceSection extends StatelessWidget {
             ),
             const SizedBox(height: 2),
           ],
-          const Text(
-            '今日涨跌接入行情后显示',
-            style: TextStyle(fontSize: 13, color: AppColors.textMuted),
-          ),
         ],
       ),
     );

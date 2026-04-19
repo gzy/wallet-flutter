@@ -4,10 +4,12 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:web3dart/web3dart.dart';
 
 import '../config/evm_environment.dart';
+import '../models/chain_transaction_vo.dart';
 import '../models/coin_data.dart';
 import '../models/evm_network.dart';
 import '../providers/wallet_controller.dart';
 import '../services/evm/blockscout_account_tx_service.dart';
+import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
 import 'flash_screen.dart';
 import 'receive_screen.dart';
@@ -103,6 +105,87 @@ List<BlockscoutAccountTx> _visibleTransactions(
   }).toList();
 }
 
+String _normAddrForTx(String raw) {
+  final s = raw.trim().toLowerCase();
+  if (s.isEmpty) {
+    return '';
+  }
+  return s.startsWith('0x') ? s : '0x$s';
+}
+
+/// 与后端 `fundDirection`（in/out）或 from 地址推断一致。
+bool _apiTxIsOutgoing(ChainTransactionVo tx, String walletHex) {
+  final fd = tx.fundDirection?.toLowerCase().trim();
+  if (fd == 'out' || fd == 'send' || fd == 'outgoing') {
+    return true;
+  }
+  if (fd == 'in' || fd == 'receive' || fd == 'incoming') {
+    return false;
+  }
+  final w = _normAddrForTx(walletHex);
+  final from = tx.fromAddress?.trim() ?? '';
+  if (from.isEmpty) {
+    return false;
+  }
+  return _normAddrForTx(from) == w;
+}
+
+List<ChainTransactionVo> _visibleApiTransactions(
+  List<ChainTransactionVo> txs,
+  _TxChipFilter filter,
+  String walletHex,
+) {
+  if (txs.isEmpty) {
+    return txs;
+  }
+  return txs.where((tx) {
+    final out = _apiTxIsOutgoing(tx, walletHex);
+    final q = tx.quantity ?? 0;
+    switch (filter) {
+      case _TxChipFilter.all:
+        return true;
+      case _TxChipFilter.receive:
+        return !out;
+      case _TxChipFilter.send:
+        return out && q > 0;
+      case _TxChipFilter.pending:
+        final bn = tx.blockNumber?.trim() ?? '';
+        return bn.isEmpty;
+      case _TxChipFilter.gasOnly:
+        return out && q == 0;
+    }
+  }).toList();
+}
+
+String _formatApiQuantity(double? q) {
+  if (q == null) {
+    return '—';
+  }
+  if (q == 0) {
+    return '0';
+  }
+  final v = q.abs();
+  if (v >= 1) {
+    return q
+        .toStringAsFixed(5)
+        .replaceFirst(RegExp(r'0+$'), '')
+        .replaceFirst(RegExp(r'\.$'), '');
+  }
+  return q
+      .toStringAsFixed(6)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
+}
+
+/// 后端 `status` 未文档化：仅将显式非 1 视为未成功展示。
+bool _apiTxLooksSuccessful(ChainTransactionVo tx) {
+  final s = tx.status;
+  if (s == null || s == 1) {
+    return true;
+  }
+  return false;
+}
+
 String _formatTxEthAmount(BigInt wei) {
   try {
     final v = EtherAmount.inWei(wei).getValueInUnit(EtherUnit.ether);
@@ -134,11 +217,21 @@ class CoinDetailScreen extends StatefulWidget {
 
 class _CoinDetailScreenState extends State<CoinDetailScreen> {
   final BlockscoutAccountTxService _txService = BlockscoutAccountTxService();
-  List<BlockscoutAccountTx> _txs = const [];
+  final WalletTransactionService _txDetailService = WalletTransactionService();
+
+  /// 非 `null` 表示已成功走过后端列表接口（含空列表）。
+  List<ChainTransactionVo>? _txsFromApi;
+  List<BlockscoutAccountTx> _txsFromScout = const [];
   bool _txLoading = false;
   String? _txError;
   int _txRequestGen = 0;
   _TxChipFilter _txFilter = _TxChipFilter.all;
+
+  bool _txCompositeEmpty() =>
+      _txsFromApi != null ? _txsFromApi!.isEmpty : _txsFromScout.isEmpty;
+
+  bool _txHasRows() =>
+      _txsFromApi != null ? _txsFromApi!.isNotEmpty : _txsFromScout.isNotEmpty;
 
   @override
   void initState() {
@@ -152,15 +245,15 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     final wc = context.read<WalletController>();
     final addr = wc.addressHex;
     final live = _liveCoin(wc, widget.coin);
-    final net = EvmEnvironment.networkIdForChainId(live.chainId);
-    final root = net != null ? EvmEnvironment.blockscoutApiRoot(net) : null;
+    final evmNet = EvmEnvironment.networkIdForChainId(live.chainId);
     final gen = ++_txRequestGen;
     if (!mounted) {
       return;
     }
-    if (addr == null || root == null) {
+    if (addr == null || evmNet == null) {
       setState(() {
-        _txs = const [];
+        _txsFromApi = null;
+        _txsFromScout = const [];
         _txLoading = false;
         _txError = null;
       });
@@ -168,17 +261,59 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     }
     setState(() {
       _txError = null;
-      if (_txs.isEmpty) {
+      if (_txCompositeEmpty()) {
         _txLoading = true;
       }
     });
     try {
+      final chain = wc.backendChainParam(evmNet);
+      final address = addr.startsWith('0x') ? addr : '0x$addr';
+      final apiList = await _txDetailService.fetchTransactionHistory(
+        address: address,
+        chain: chain,
+        coin: live.symbol,
+      );
+      if (!mounted || gen != _txRequestGen) {
+        return;
+      }
+      if (apiList != null) {
+        setState(() {
+          _txsFromApi = apiList;
+          _txsFromScout = const [];
+          _txLoading = false;
+        });
+        return;
+      }
+
+      final chainId = live.chainId;
+      if (chainId != null && wc.backendHasEvmChainId(chainId)) {
+        if (!mounted || gen != _txRequestGen) {
+          return;
+        }
+        setState(() {
+          _txsFromApi = const [];
+          _txsFromScout = const [];
+          _txLoading = false;
+        });
+        return;
+      }
+
+      final root = EvmEnvironment.blockscoutApiRoot(evmNet);
+      if (root == null) {
+        setState(() {
+          _txsFromApi = null;
+          _txsFromScout = const [];
+          _txLoading = false;
+        });
+        return;
+      }
       final list = await _txService.fetchTxList(apiRoot: root, address: addr);
       if (!mounted || gen != _txRequestGen) {
         return;
       }
       setState(() {
-        _txs = list;
+        _txsFromApi = null;
+        _txsFromScout = list;
         _txLoading = false;
       });
     } catch (e) {
@@ -216,6 +351,136 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     } catch (_) {}
   }
 
+  Future<void> _onTapTransaction(
+    EvmNetworkId evmNet,
+    CoinData live,
+    String rawTxHash,
+  ) async {
+    final wc = context.read<WalletController>();
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: AppColors.accent),
+      ),
+    );
+    final h = rawTxHash.startsWith('0x') ? rawTxHash : '0x$rawTxHash';
+    final chain = wc.backendChainParam(evmNet);
+    final detail = await _txDetailService.fetchTransactionDetail(
+      txHash: h,
+      chain: chain,
+      crypto: live.symbol,
+    );
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop();
+    if (detail == null) {
+      await _openExplorerTx(evmNet, rawTxHash);
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.viewInsetsOf(ctx).bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      '交易详情',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _txDetailRow('网络', detail.chainName ?? detail.chain ?? '—'),
+                    _txDetailRow('方向', detail.fundDirection ?? '—'),
+                    _txDetailRow(
+                      '数量',
+                      detail.quantity != null
+                          ? '${detail.quantity} ${detail.crypto ?? live.symbol}'
+                          : '—',
+                    ),
+                    _txDetailRow('从', detail.fromAddress ?? '—'),
+                    _txDetailRow('至', detail.toAddress ?? '—'),
+                    _txDetailRow('区块', detail.blockNumber ?? '—'),
+                    _txDetailRow(
+                      '时间',
+                      detail.transactionTime != null
+                          ? _formatTxListTime(detail.transactionTime!.toLocal())
+                          : '—',
+                    ),
+                    _txDetailRow(
+                      '手续费',
+                      detail.transactionFee != null
+                          ? '${detail.transactionFee} ${detail.feeCrypto ?? ''}'
+                              .trim()
+                          : '—',
+                    ),
+                    _txDetailRow('状态', detail.status?.toString() ?? '—'),
+                    if (detail.protocol != null && detail.protocol!.isNotEmpty)
+                      _txDetailRow('协议', detail.protocol!),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _openExplorerTx(evmNet, rawTxHash);
+                      },
+                      child: const Text('在区块浏览器中打开'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _txDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 56,
+            child: Text(
+              label,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 13),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final wc = context.watch<WalletController>();
@@ -223,9 +488,15 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     final evmNet = EvmEnvironment.networkIdForChainId(live.chainId);
     final subtitle = _walletAddressSubtitle(wc);
     final walletHex = wc.addressHex;
-    final visibleTxs = walletHex == null
+    final useApiList = _txsFromApi != null;
+    final visibleTxsApi = (walletHex == null || !useApiList)
+        ? const <ChainTransactionVo>[]
+        : _visibleApiTransactions(_txsFromApi!, _txFilter, walletHex);
+    final visibleTxsScout = (walletHex == null || useApiList)
         ? const <BlockscoutAccountTx>[]
-        : _visibleTransactions(_txs, _txFilter, walletHex);
+        : _visibleTransactions(_txsFromScout, _txFilter, walletHex);
+    final filterEmpty =
+        useApiList ? visibleTxsApi.isEmpty : visibleTxsScout.isEmpty;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -460,7 +731,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         ),
                       ),
                     ),
-                    if (_txLoading && _txs.isEmpty)
+                    if (_txLoading && _txCompositeEmpty())
                       const SliverToBoxAdapter(
                         child: Padding(
                           padding: EdgeInsets.symmetric(vertical: 36),
@@ -493,7 +764,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                       ),
                     if (!_txLoading &&
                         _txError == null &&
-                        _txs.isEmpty &&
+                        _txCompositeEmpty() &&
                         evmNet != null &&
                         wc.addressHex != null)
                       SliverFillRemaining(
@@ -531,7 +802,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                       ),
                     if (!_txLoading &&
                         _txError == null &&
-                        _txs.isEmpty &&
+                        _txCompositeEmpty() &&
                         (evmNet == null || wc.addressHex == null))
                       SliverFillRemaining(
                         hasScrollBody: false,
@@ -554,8 +825,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                       ),
                     if (!_txLoading &&
                         _txError == null &&
-                        _txs.isNotEmpty &&
-                        visibleTxs.isEmpty)
+                        _txHasRows() &&
+                        filterEmpty)
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -578,11 +849,125 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           ),
                         ),
                       ),
-                    if (visibleTxs.isNotEmpty)
+                    if (visibleTxsApi.isNotEmpty)
                       SliverList(
                         delegate: SliverChildBuilderDelegate(
                           (context, index) {
-                            final tx = visibleTxs[index];
+                            final tx = visibleTxsApi[index];
+                            final addr = wc.addressHex;
+                            if (addr == null || evmNet == null) {
+                              return const SizedBox.shrink();
+                            }
+                            final outgoing = _apiTxIsOutgoing(tx, addr);
+                            final counter = outgoing
+                                ? (tx.toAddress ?? '').trim()
+                                : (tx.fromAddress ?? '').trim();
+                            final counterLabel =
+                                counter.isEmpty ? '合约创建' : _shortAddr(counter);
+                            final amt = _formatApiQuantity(tx.quantity);
+                            final sign = outgoing ? '-' : '+';
+                            final hash = tx.txHash ?? '';
+                            final t = tx.transactionTime?.toLocal();
+                            final ok = _apiTxLooksSuccessful(tx);
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _onTapTransaction(
+                                  evmNet,
+                                  live,
+                                  hash,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 12, horizontal: 4),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        outgoing
+                                            ? Icons.north_east
+                                            : Icons.south_west,
+                                        size: 22,
+                                        color: outgoing
+                                            ? AppColors.textSecondary
+                                            : const Color(0xFF10E8CF),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              outgoing ? '转出' : '收款',
+                                              style: const TextStyle(
+                                                color: AppColors.textPrimary,
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              counterLabel,
+                                              style: const TextStyle(
+                                                color: AppColors.textSecondary,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              _shortTxHash(hash),
+                                              style: const TextStyle(
+                                                color: AppColors.textMuted,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            '$sign$amt ${tx.crypto ?? live.symbol}',
+                                            style: TextStyle(
+                                              color: ok
+                                                  ? (outgoing
+                                                      ? AppColors.textPrimary
+                                                      : const Color(0xFF10E8CF))
+                                                  : AppColors.error,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            t != null
+                                                ? _formatTxListTime(t)
+                                                : '—',
+                                            style: const TextStyle(
+                                              color: AppColors.textMuted,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                          childCount: visibleTxsApi.length,
+                        ),
+                      ),
+                    if (visibleTxsScout.isNotEmpty)
+                      SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final tx = visibleTxsScout[index];
                             final addr = wc.addressHex;
                             if (addr == null || evmNet == null) {
                               return const SizedBox.shrink();
@@ -597,7 +982,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                             return Material(
                               color: Colors.transparent,
                               child: InkWell(
-                                onTap: () => _openExplorerTx(evmNet, tx.hash),
+                                onTap: () => _onTapTransaction(
+                                  evmNet,
+                                  live,
+                                  tx.hash,
+                                ),
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 12, horizontal: 4),
@@ -679,7 +1068,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                               ),
                             );
                           },
-                          childCount: visibleTxs.length,
+                          childCount: visibleTxsScout.length,
                         ),
                       ),
                   ],

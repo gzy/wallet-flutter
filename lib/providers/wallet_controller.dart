@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web3dart/web3dart.dart';
 
+import '../models/app_chain_config.dart';
 import '../models/coin_data.dart';
 import '../models/evm_network.dart';
 import '../models/stored_wallet.dart';
@@ -13,6 +14,8 @@ import '../services/evm/send_service.dart';
 import '../services/evm/transfer_fee_service.dart';
 import '../services/evm/token_service.dart';
 import '../services/market/app_price_service.dart';
+import '../services/wallet/chains_service.dart';
+import '../services/wallet/wallet_balance_service.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
@@ -24,15 +27,21 @@ class WalletController extends ChangeNotifier {
     TokenService? tokenService,
     SendService? sendService,
     AppPriceService? appPriceService,
+    ChainsService? chainsService,
+    WalletBalanceService? walletBalanceService,
   })  : _storage = storage ?? SecureStorageService(),
         _tokenService = tokenService ?? TokenService(),
         _sendService = sendService ?? SendService(),
-        _appPriceService = appPriceService ?? AppPriceService();
+        _appPriceService = appPriceService ?? AppPriceService(),
+        _chainsService = chainsService ?? ChainsService(),
+        _walletBalanceService = walletBalanceService ?? WalletBalanceService();
 
   final SecureStorageService _storage;
   final TokenService _tokenService;
   final SendService _sendService;
   final AppPriceService _appPriceService;
+  final ChainsService _chainsService;
+  final WalletBalanceService _walletBalanceService;
 
   static const _uuid = Uuid();
 
@@ -48,6 +57,11 @@ class WalletController extends ChangeNotifier {
   bool _initReady = false;
 
   List<CoinData> _evmCoins = [];
+
+  /// 启动时由 [ChainsService] 拉取，供后续对接 `/api/app/wallet/balance` 等（`chain` 参数与 [AppChainConfig.chainId] 对齐）。
+  List<AppChainConfig> _backendChains = [];
+
+  List<AppChainConfig> get backendChains => List.unmodifiable(_backendChains);
 
   bool get hasWallet => _credentials != null;
   String? get addressHex => _addressHex;
@@ -78,10 +92,89 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 与 `GET /api/app/chains` 返回的 `chainId` 对齐，供 `/api/app/wallet/balance` 的 `chain` 查询参数使用。
+  String _balanceChainQueryParam(EvmNetworkId networkKey) {
+    final want = EvmEnvironment.chainId(networkKey).toString();
+    for (final c in _backendChains) {
+      if (c.chainType.toUpperCase() != 'EVM') {
+        continue;
+      }
+      if (c.chainId == want) {
+        return c.chainId;
+      }
+    }
+    return want;
+  }
+
+  /// 与后端钱包接口（余额、交易详情等）的 `chain` 查询参数一致。
+  String backendChainParam(EvmNetworkId network) =>
+      _balanceChainQueryParam(network);
+
+  /// 当前 [backendChains] 是否包含该 EVM 链（`status == 1` 或未填视为启用）。
+  bool backendHasEvmChainId(int chainId) {
+    final want = chainId.toString();
+    for (final c in _backendChains) {
+      if (c.chainType.toUpperCase() != 'EVM') {
+        continue;
+      }
+      if (c.chainId != want) {
+        continue;
+      }
+      if (c.status != null && c.status != 1) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  Iterable<AppChainConfig> _activeEvmBackendChains() sync* {
+    for (final c in _backendChains) {
+      if (c.chainType.toUpperCase() != 'EVM') {
+        continue;
+      }
+      if (c.chainId.isEmpty) {
+        continue;
+      }
+      if (c.status != null && c.status != 1) {
+        continue;
+      }
+      yield c;
+    }
+  }
+
+  String _cryptoListIcon(String symbol) {
+    switch (symbol.toUpperCase()) {
+      case 'ETH':
+        return '⚪';
+      case 'USDT':
+        return '₮';
+      case 'BTC':
+        return '₿';
+      default:
+        final u = symbol.toUpperCase();
+        return u.isEmpty ? '◆' : u.substring(0, 1);
+    }
+  }
+
+  double _nativeBalanceFromRows(List<WalletBalanceEntry> rows, String symbol) {
+    final s = symbol.toUpperCase();
+    for (final r in rows) {
+      if (r.crypto?.toUpperCase() == s) {
+        return r.balance;
+      }
+    }
+    return 0;
+  }
+
   Future<void> init() async {
     _initReady = false;
     notifyListeners();
     try {
+      _backendChains = await _chainsService.fetchChains();
+      if (kDebugMode && _backendChains.isNotEmpty) {
+        debugPrint('WalletController: backend chains ${_backendChains.length}');
+      }
       _pinEnabled = await _storage.hasPin();
       _wallets = await _storage.readWalletList();
       await _reconcileBackedUpFromLegacyKeys();
@@ -400,29 +493,125 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
     try {
       final addr = _credentials!.address;
+      final addressHex = addr.hex;
       final quotes = await _appPriceService.fetchAllPrices();
+      final backendEvm = _activeEvmBackendChains().toList();
       final coins = <CoinData>[];
-      for (final cfg in EvmEnvironment.nativeCoins) {
-        final bal =
-            await _tokenService.getEthBalanceEther(cfg.networkKey, addr);
-        final pair = AppPriceService.usdtPairKeyForSymbol(cfg.symbol);
-        final q = quotes[pair];
-        final price = q?.price ?? 0;
-        final change = q?.change24h ?? 0;
-        coins.add(
-          CoinData(
-            id: cfg.coinListId,
-            symbol: cfg.symbol,
-            name: cfg.name,
-            icon: cfg.icon,
-            network: cfg.networkLabel,
-            chainId: EvmEnvironment.chainId(cfg.networkKey),
-            price: price,
-            priceChange24h: change,
-            balance: bal,
-            balanceUSD: bal * price,
-          ),
-        );
+      if (backendEvm.isNotEmpty) {
+        final seen = <String>{};
+        for (final chainCfg in backendEvm) {
+          final chainParam = chainCfg.chainId;
+          final remote = await _walletBalanceService.fetchBalances(
+            address: addressHex,
+            chain: chainParam,
+          );
+          final chainIdInt = int.tryParse(chainCfg.chainId);
+          if (remote != null && remote.isNotEmpty) {
+            for (final row in remote) {
+              final sym = row.crypto?.trim() ?? '';
+              if (sym.isEmpty) {
+                continue;
+              }
+              final key = '${chainCfg.chainId}_${sym.toUpperCase()}';
+              if (!seen.add(key)) {
+                continue;
+              }
+              AppChainCrypto? meta;
+              for (final x in chainCfg.cryptos) {
+                if (x.crypto.toUpperCase() == sym.toUpperCase()) {
+                  meta = x;
+                  break;
+                }
+              }
+              final pair = AppPriceService.usdtPairKeyForSymbol(sym);
+              final q = quotes[pair];
+              final price = q?.price ?? 0;
+              final change = q?.change24h ?? 0;
+              final bal = row.balance;
+              coins.add(
+                CoinData(
+                  id: 'evm_${chainCfg.chainId}_${sym.toUpperCase()}',
+                  symbol: sym.toUpperCase(),
+                  name: meta?.cryptoName ?? sym.toUpperCase(),
+                  icon: _cryptoListIcon(sym),
+                  network: chainCfg.chainName,
+                  chainId: chainIdInt,
+                  price: price,
+                  priceChange24h: change,
+                  balance: bal,
+                  balanceUSD: bal * price,
+                ),
+              );
+            }
+          } else {
+            for (final c in chainCfg.cryptos) {
+              if (c.isNative != 1) {
+                continue;
+              }
+              final sym = c.crypto.toUpperCase();
+              final key = '${chainCfg.chainId}_$sym';
+              if (!seen.add(key)) {
+                continue;
+              }
+              final netId = EvmEnvironment.networkIdForChainId(chainIdInt);
+              double bal = 0;
+              if (netId != null) {
+                bal = await _tokenService.getEthBalanceEther(netId, addr);
+              }
+              final pair = AppPriceService.usdtPairKeyForSymbol(sym);
+              final q = quotes[pair];
+              final price = q?.price ?? 0;
+              final change = q?.change24h ?? 0;
+              coins.add(
+                CoinData(
+                  id: 'evm_${chainCfg.chainId}_$sym',
+                  symbol: sym,
+                  name: c.cryptoName ?? sym,
+                  icon: _cryptoListIcon(sym),
+                  network: chainCfg.chainName,
+                  chainId: chainIdInt,
+                  price: price,
+                  priceChange24h: change,
+                  balance: bal,
+                  balanceUSD: bal * price,
+                ),
+              );
+            }
+          }
+        }
+      } else {
+        for (final cfg in EvmEnvironment.nativeCoins) {
+          final chainParam = _balanceChainQueryParam(cfg.networkKey);
+          final remote = await _walletBalanceService.fetchBalances(
+            address: addressHex,
+            chain: chainParam,
+            coin: cfg.symbol,
+          );
+          double bal;
+          if (remote == null) {
+            bal = await _tokenService.getEthBalanceEther(cfg.networkKey, addr);
+          } else {
+            bal = _nativeBalanceFromRows(remote, cfg.symbol);
+          }
+          final pair = AppPriceService.usdtPairKeyForSymbol(cfg.symbol);
+          final q = quotes[pair];
+          final price = q?.price ?? 0;
+          final change = q?.change24h ?? 0;
+          coins.add(
+            CoinData(
+              id: cfg.coinListId,
+              symbol: cfg.symbol,
+              name: cfg.name,
+              icon: cfg.icon,
+              network: cfg.networkLabel,
+              chainId: EvmEnvironment.chainId(cfg.networkKey),
+              price: price,
+              priceChange24h: change,
+              balance: bal,
+              balanceUSD: bal * price,
+            ),
+          );
+        }
       }
       _evmCoins = coins;
     } catch (e, st) {

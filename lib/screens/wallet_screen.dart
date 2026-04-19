@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../config/evm_environment.dart';
 import '../models/coin_data.dart';
 import '../models/stored_wallet.dart';
 import '../providers/wallet_controller.dart';
@@ -85,16 +86,21 @@ class _WalletScreenState extends State<WalletScreen> {
             ? '${wallet.addressHex!.substring(0, 6)}…${wallet.addressHex!.substring(wallet.addressHex!.length - 4)}'
             : '未创建钱包');
     final q = _searchController.text.trim().toLowerCase();
+    final coinsOnNetwork = coins.where((c) {
+      final id = EvmEnvironment.networkIdForChainId(c.chainId);
+      return id == wallet.sendNetwork;
+    }).toList();
     final filteredCoins = q.isEmpty
-        ? coins
-        : coins
+        ? coinsOnNetwork
+        : coinsOnNetwork
             .where((c) =>
                 c.symbol.toLowerCase().contains(q) ||
                 c.name.toLowerCase().contains(q) ||
                 (c.network?.toLowerCase().contains(q) == true))
             .toList();
 
-    final totalBalance = coins.fold<double>(0, (sum, coin) => sum + coin.balanceUSD);
+    final totalBalance = coinsOnNetwork.fold<double>(
+        0, (sum, coin) => sum + coin.balanceUSD);
 
     return SafeArea(
       child: Scaffold(

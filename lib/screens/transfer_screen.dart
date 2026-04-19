@@ -554,9 +554,14 @@ class _TransferScreenState extends State<TransferScreen> {
                       child: Row(
                         children: [
                           const Spacer(),
-                          const Text('选择币种',
-                              style: TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.w600)),
+                          const Text(
+                            '选择币种',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
                           const Spacer(),
                           GestureDetector(
                             onTap: () => Navigator.pop(context),
@@ -584,7 +589,10 @@ class _TransferScreenState extends State<TransferScreen> {
                               child: TextField(
                                 onChanged: (v) =>
                                     setSheetState(() => searchQuery = v.trim()),
-                                style: const TextStyle(fontSize: 16),
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w400,
+                                ),
                                 decoration: const InputDecoration(
                                   hintText: '搜索',
                                   hintStyle:
@@ -593,10 +601,14 @@ class _TransferScreenState extends State<TransferScreen> {
                                 ),
                               ),
                             ),
-                            const Text('粘贴',
-                                style: TextStyle(
-                                    color: Color(0xFF22D3AA),
-                                    fontWeight: FontWeight.w600)),
+                            const Text(
+                              '粘贴',
+                              style: TextStyle(
+                                color: Color(0xFF22D3AA),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -627,8 +639,8 @@ class _TransferScreenState extends State<TransferScreen> {
                                       t.mark,
                                       style: const TextStyle(
                                         color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 18,
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 16,
                                       ),
                                     ),
                                   ),
@@ -641,16 +653,17 @@ class _TransferScreenState extends State<TransferScreen> {
                                         Text(
                                           t.symbol,
                                           style: const TextStyle(
-                                            fontSize: 17,
+                                            fontSize: 16,
                                             color: AppColors.textPrimary,
-                                            fontWeight: FontWeight.w600,
+                                            fontWeight: FontWeight.w400,
                                           ),
                                         ),
                                         Text(
                                           t.network,
                                           style: const TextStyle(
-                                            fontSize: 14,
+                                            fontSize: 13,
                                             color: AppColors.textSecondary,
+                                            fontWeight: FontWeight.w400,
                                           ),
                                         ),
                                       ],
@@ -661,9 +674,9 @@ class _TransferScreenState extends State<TransferScreen> {
                                         ? '0'
                                         : t.balance.toStringAsFixed(4),
                                     style: const TextStyle(
-                                      fontSize: 30,
+                                      fontSize: 15,
                                       color: AppColors.textPrimary,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w400,
                                     ),
                                   ),
                                 ],

@@ -11,13 +11,13 @@
 					<key>kind</key>
 					<string>software-package</string>
 					<key>url</key>
-					<string>https://app-download-test.uone.me/wallet-flutter/WalletFlutter.ipa</string>
+					<string>https://app-download-test.uone.me/wallet-flutter/wallet_flutter.ipa</string>
 				</dict>
 			</array>
 			<key>metadata</key>
 			<dict>
 				<key>bundle-identifier</key>
-				<string>com.eop.walletflutter</string>
+				<string>com.uone.walletapp</string>
 				<key>bundle-version</key>
 				<string>1</string>
 				<key>kind</key>
