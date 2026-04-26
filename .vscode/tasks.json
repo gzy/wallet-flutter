@@ -1,5 +1,6 @@
 {
     // 命令面板「Tasks: Run Task」或终端菜单「运行任务…」执行。链/主测网由 `GET /api/app/chains` 等接口决定，不再传 EVM_FLAVOR。
+    // 首包/Release 可能很久且 Console 里长时间只显示 assembleRelease 一行，属 Flutter 对 Gradle 的包装默认不刷子步骤；要进度请用「APK（详细日志）」或终端里 `cd android && ./gradlew assembleRelease --info`。
     "version": "2.0.0",
     "tasks": [
         {
@@ -9,6 +10,19 @@
             "args": [
                 "-lc",
                 "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build apk"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "Android: APK（详细日志）",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-lc",
+                "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build apk -v"
             ],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
