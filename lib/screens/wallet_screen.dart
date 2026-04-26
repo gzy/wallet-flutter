@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../config/evm_environment.dart';
 import '../models/coin_data.dart';
 import '../models/stored_wallet.dart';
 import '../providers/wallet_controller.dart';
@@ -87,8 +86,11 @@ class _WalletScreenState extends State<WalletScreen> {
             : '未创建钱包');
     final q = _searchController.text.trim().toLowerCase();
     final coinsOnNetwork = coins.where((c) {
-      final id = EvmEnvironment.networkIdForChainId(c.chainId);
-      return id == wallet.sendNetwork;
+      // null = 未解析到默认链时展示全部，避免误筛掉所有 EVM 币（它们的 chainId 均有值）
+      if (wallet.sendChainId == null) {
+        return true;
+      }
+      return c.chainId == wallet.sendChainId;
     }).toList();
     final filteredCoins = q.isEmpty
         ? coinsOnNetwork

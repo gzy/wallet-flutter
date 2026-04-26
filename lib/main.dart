@@ -1,8 +1,13 @@
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
+import 'data/local/app_local_cache.dart';
 import 'theme/app_colors.dart';
 import 'providers/wallet_controller.dart';
+import 'services/install/install_guard.dart';
 import 'screens/wallet_screen.dart';
 import 'screens/market_screen.dart';
 import 'screens/explore_screen.dart';
@@ -14,7 +19,7 @@ import 'screens/welcome_screen.dart';
 // 临时预览欢迎页：改为 false 即恢复正常（有钱包进主页、PIN 照常）。
 const bool _previewWelcome = false;
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -25,10 +30,26 @@ void main() {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
+  try {
+    await InstallGuard.purgeWalletSecretsOnFreshInstall();
+  } catch (_) {
+    // 首次安装检测失败时，为避免阻塞启动，继续运行。
+  }
+  AppLocalCache? appCache;
+  if (!kIsWeb) {
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await applyWorkaroundToOpenSqlite3OnOldAndroidVersions();
+      }
+      appCache = AppLocalCache.open();
+    } catch (e, st) {
+      debugPrint('AppLocalCache init failed: $e\n$st');
+    }
+  }
   runApp(
-    ChangeNotifierProvider(
+    ChangeNotifierProvider<WalletController>(
       create: (_) {
-        final c = WalletController();
+        final c = WalletController(localCache: appCache);
         c.init();
         return c;
       },

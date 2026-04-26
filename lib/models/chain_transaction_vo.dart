@@ -1,4 +1,4 @@
-/// 与 OpenAPI `ChainTransactionVO` / `POST /api/app/wallet/transactionDetail` 的 `data` 一致。
+/// 与 OpenAPI `ChainTransactionVO`、钱包 `transactionHistory` 列表项及 `transactionDetail` 的 `data` 字段一致。
 class ChainTransactionVo {
   const ChainTransactionVo({
     this.crypto,
@@ -40,11 +40,17 @@ class ChainTransactionVo {
   final String? txLink;
   final String? addressLinkPrefix;
 
+  /// 列表接口里 [includeDetail] 为 `Y` 等真值时，字段已够展示详情，无需再调 `transactionDetail`。
+  bool get walletHistoryRowIncludesDetail {
+    final v = includeDetail?.trim().toUpperCase();
+    return v == 'Y' || v == 'YES' || v == 'TRUE' || v == '1';
+  }
+
   factory ChainTransactionVo.fromJson(Map<String, dynamic> json) {
     DateTime? time;
     final raw = json['transactionTime'];
     if (raw != null) {
-      time = DateTime.tryParse(raw.toString());
+      time = _parseTransactionTime(raw.toString());
     }
     return ChainTransactionVo(
       crypto: json['crypto']?.toString(),
@@ -67,6 +73,54 @@ class ChainTransactionVo {
       addressLinkPrefix: json['addressLinkPrefix']?.toString(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'crypto': crypto,
+        'chain': chain,
+        'chainName': chainName,
+        'txHash': txHash,
+        'fromAddress': fromAddress,
+        'toAddress': toAddress,
+        'quantity': quantity,
+        'blockNumber': blockNumber,
+        'status': status,
+        'fundDirection': fundDirection,
+        'contractAddress': contractAddress,
+        'protocol': protocol,
+        'transactionTime': transactionTime?.toIso8601String(),
+        'includeDetail': includeDetail,
+        'transactionFee': transactionFee,
+        'feeCrypto': feeCrypto,
+        'txLink': txLink,
+        'addressLinkPrefix': addressLinkPrefix,
+      };
+}
+
+/// 支持 ISO8601 及常见后端格式 `yyyy-MM-dd HH:mm:ss`（无时区时按本地日历解析）。
+DateTime? _parseTransactionTime(String raw) {
+  final s = raw.trim();
+  if (s.isEmpty) {
+    return null;
+  }
+  final iso = DateTime.tryParse(s);
+  if (iso != null) {
+    return iso;
+  }
+  final m = RegExp(
+    r'^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?',
+  ).firstMatch(s);
+  if (m == null) {
+    return null;
+  }
+  final sec = m[6] != null ? int.parse(m[6]!) : 0;
+  return DateTime(
+    int.parse(m[1]!),
+    int.parse(m[2]!),
+    int.parse(m[3]!),
+    int.parse(m[4]!),
+    int.parse(m[5]!),
+    sec,
+  );
 }
 
 int? _asInt(Object? v) {

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../models/recent_recipient.dart';
 import '../../models/stored_wallet.dart';
 import 'pin_crypto.dart';
 
@@ -27,6 +28,39 @@ class SecureStorageService {
 
   String _mnemonicKey(String id) => 'wallet_mnemonic__$id';
   String _backedUpKey(String id) => 'wallet_backed_up__$id';
+  String _hiddenCoinsKey(String id) => 'wallet_hidden_coins__$id';
+  String _recentRecipientsKey(String id) => 'wallet_recent_recipients__$id';
+
+  /// 用于“卸载重装后首次启动”场景：Keychain 默认不会随卸载清空，
+  /// 因此重装后需要主动清理钱包相关条目，避免旧钱包被恢复出来。
+  ///
+  /// 注意：只删除本应用钱包模块使用的 key，避免误伤其它 secure storage 用途。
+  Future<void> purgeWalletKeysForFreshInstall() async {
+    final all = await _storage.readAll(iOptions: _iosOptions);
+    if (all.isEmpty) return;
+
+    bool shouldDelete(String key) {
+      if (key == _kWalletList ||
+          key == _kActiveId ||
+          key == _kPinHash ||
+          key == _kPinSalt ||
+          key == _kPinFailCount ||
+          key == _kPinLockUntilMs) {
+        return true;
+      }
+      if (key.startsWith('wallet_mnemonic__')) return true;
+      if (key.startsWith('wallet_backed_up__')) return true;
+      if (key.startsWith('wallet_hidden_coins__')) return true;
+      if (key.startsWith('wallet_recent_recipients__')) return true;
+      return false;
+    }
+
+    for (final k in all.keys) {
+      if (shouldDelete(k)) {
+        await _storage.delete(key: k, iOptions: _iosOptions);
+      }
+    }
+  }
 
   Future<List<StoredWallet>> readWalletList() async {
     final raw = await _storage.read(key: _kWalletList, iOptions: _iosOptions);
@@ -63,6 +97,107 @@ class SecureStorageService {
   Future<void> deleteWalletData(String id) async {
     await _storage.delete(key: _mnemonicKey(id), iOptions: _iosOptions);
     await _storage.delete(key: _backedUpKey(id), iOptions: _iosOptions);
+    await _storage.delete(key: _hiddenCoinsKey(id), iOptions: _iosOptions);
+    await _storage.delete(key: _recentRecipientsKey(id), iOptions: _iosOptions);
+  }
+
+  static const int _kMaxRecentRecipients = 40;
+
+  /// 与 `/api/app/wallet/*` 的 `chain` 参数一致；同一链上同一地址去重，新记录置顶。
+  Future<void> recordRecentRecipient({
+    required String walletId,
+    required String chain,
+    required String address,
+  }) async {
+    final c = chain.trim();
+    if (c.isEmpty) {
+      return;
+    }
+    var a = address.trim();
+    if (a.isEmpty) {
+      return;
+    }
+    if (!a.toLowerCase().startsWith('0x')) {
+      a = '0x$a';
+    }
+    a = a.toLowerCase();
+    final chainNorm = c.toUpperCase();
+    var items = <Map<String, dynamic>>[];
+    final raw = await _storage.read(key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final list = jsonDecode(raw) as List<dynamic>;
+        for (final e in list) {
+          if (e is Map) {
+            items.add(Map<String, dynamic>.from(e));
+          }
+        }
+      } catch (_) {}
+    }
+    items = items
+        .where((e) =>
+            (e['chain']?.toString() ?? '').toUpperCase() != chainNorm ||
+            (e['address']?.toString() ?? '').toLowerCase() != a)
+        .toList();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    items.insert(0, {'chain': c, 'address': a, 'atMs': now});
+    if (items.length > _kMaxRecentRecipients) {
+      items = items.sublist(0, _kMaxRecentRecipients);
+    }
+    final json = jsonEncode(items);
+    await _storage.write(
+      key: _recentRecipientsKey(walletId),
+      value: json,
+      iOptions: _iosOptions,
+    );
+  }
+
+  /// 仅返回 [chainQuery] 与 [RecentRecipient] 的链标识一致时（不区分大小写）的记录，按时间新到旧。
+  Future<List<RecentRecipient>> readRecentRecipientsForChain(
+    String walletId,
+    String chainQuery,
+  ) async {
+    final want = chainQuery.trim().toUpperCase();
+    if (want.isEmpty) {
+      return const [];
+    }
+    final raw = await _storage.read(key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      final out = <RecentRecipient>[];
+      for (final e in list) {
+        if (e is! Map) {
+          continue;
+        }
+        final m = Map<String, dynamic>.from(e);
+        if ((m['chain']?.toString() ?? '').toUpperCase() != want) {
+          continue;
+        }
+        out.add(RecentRecipient.fromJson(m));
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<Set<String>> readHiddenCoinIdsForWallet(String id) async {
+    final raw = await _storage.read(key: _hiddenCoinsKey(id), iOptions: _iosOptions);
+    if (raw == null || raw.isEmpty) return <String>{};
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.map((e) => e.toString()).toSet();
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  Future<void> writeHiddenCoinIdsForWallet(String id, Set<String> hidden) async {
+    final json = jsonEncode(hidden.toList()..sort());
+    await _storage.write(key: _hiddenCoinsKey(id), value: json, iOptions: _iosOptions);
   }
 
   Future<bool> readBackedUpForWallet(String id) async {

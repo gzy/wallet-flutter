@@ -4,10 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../models/chain_transaction_vo.dart';
-import '../http/logging_http_client.dart';
+import '../http/http_clients.dart';
 import '../market/app_price_service.dart' show kMarketApiBase;
 
-/// 钱包交易：`POST /api/app/wallet/transactionHistory`、`transactionDetail`。
+/// 钱包交易：`GET /api/app/wallet/transactionHistory`、`transactionDetail`（query 传参）；`chain` 一般为 `chainCode`（无则 `chainId`）。
 class WalletTransactionService {
   WalletTransactionService({http.Client? httpClient})
       : _httpClient = httpClient ?? _defaultClient();
@@ -15,15 +15,7 @@ class WalletTransactionService {
   final http.Client _httpClient;
 
   static http.Client _defaultClient() {
-    final inner = http.Client();
-    if (kDebugMode) {
-      return LoggingHttpClient(
-        inner,
-        logName: 'WalletTx',
-        maxLogBodyLength: 16000,
-      );
-    }
-    return inner;
+    return HttpClients.create(logName: 'WalletTx', maxLogBodyLength: 16000);
   }
 
   static Uri _detailUri({
@@ -68,7 +60,7 @@ class WalletTransactionService {
         headers['X-Token'] = xToken;
       }
       final res = await _httpClient
-          .post(
+          .get(
             _historyUri(address: address, chain: chain, coin: coin),
             headers: headers,
           )
@@ -122,7 +114,7 @@ class WalletTransactionService {
         headers['X-Token'] = xToken;
       }
       final res = await _httpClient
-          .post(
+          .get(
             _detailUri(txHash: txHash, chain: chain, crypto: crypto),
             headers: headers,
           )

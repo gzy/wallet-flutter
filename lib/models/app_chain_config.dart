@@ -20,7 +20,7 @@ class AppChainConfig {
     this.cryptos = const [],
   });
 
-  /// 链标识（字符串），与余额等接口的 `chain` 查询参数对齐时多用此字段。
+  /// 链 ID（字符串，如 `11155111`），与 RPC / 本地 `chainId` 对齐。
   final String chainId;
   final String chainType;
   final String chainName;
@@ -58,6 +58,28 @@ class AppChainConfig {
     );
   }
 
+  /// 钱包接口 `chain` 查询参数：后端约定优先 [chainCode]，缺失或为空时回退 [chainId]。
+  String get walletApiChainQuery {
+    final c = chainCode?.trim();
+    if (c != null && c.isNotEmpty) {
+      return c;
+    }
+    return chainId;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'chainId': chainId,
+        'chainType': chainType,
+        'chainName': chainName,
+        'symbol': symbol,
+        'chainCode': chainCode,
+        'explorerUrl': explorerUrl,
+        'addressUrlPrefix': addressUrlPrefix,
+        'txUrlPrefix': txUrlPrefix,
+        'status': status,
+        'version': version,
+        'cryptos': cryptos.map((c) => c.toJson()).toList(),
+      };
 }
 
 class AppChainCrypto {
@@ -90,4 +112,14 @@ class AppChainCrypto {
       logoUrl: json['logoUrl']?.toString(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'crypto': crypto,
+        'cryptoName': cryptoName,
+        'protocol': protocol,
+        'contractAddress': contractAddress,
+        'decimals': decimals,
+        'isNative': isNative,
+        'logoUrl': logoUrl,
+      };
 }

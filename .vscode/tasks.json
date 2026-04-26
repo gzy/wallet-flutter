@@ -1,62 +1,41 @@
 {
-    // 命令面板「Tasks: Run Task」或终端菜单「运行任务…」执行；与 lib/config/evm_environment.dart 中 EVM_FLAVOR 一致。
+    // 命令面板「Tasks: Run Task」或终端菜单「运行任务…」执行。链/主测网由 `GET /api/app/chains` 等接口决定，不再传 EVM_FLAVOR。
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Android: APK（测试网）",
+            "label": "Android: APK",
             "type": "shell",
-            "command": "flutter",
-            "args": ["build", "apk", "--dart-define=EVM_FLAVOR=testnet"],
+            "command": "bash",
+            "args": [
+                "-lc",
+                "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build apk"
+            ],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "presentation": { "reveal": "always", "panel": "shared", "focus": true },
             "problemMatcher": []
         },
         {
-            "label": "Android: APK（主网）",
+            "label": "Android: APK 分 ABI",
             "type": "shell",
-            "command": "flutter",
-            "args": ["build", "apk", "--dart-define=EVM_FLAVOR=mainnet"],
+            "command": "bash",
+            "args": [
+                "-lc",
+                "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build apk --split-per-abi"
+            ],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "presentation": { "reveal": "always", "panel": "shared", "focus": true },
             "problemMatcher": []
         },
         {
-            "label": "Android: APK 分 ABI（测试网）",
+            "label": "Android: App Bundle",
             "type": "shell",
-            "command": "flutter",
-            "args": ["build", "apk", "--split-per-abi", "--dart-define=EVM_FLAVOR=testnet"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "group": "build",
-            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
-            "problemMatcher": []
-        },
-        {
-            "label": "Android: APK 分 ABI（主网）",
-            "type": "shell",
-            "command": "flutter",
-            "args": ["build", "apk", "--split-per-abi", "--dart-define=EVM_FLAVOR=mainnet"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "group": "build",
-            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
-            "problemMatcher": []
-        },
-        {
-            "label": "Android: App Bundle（测试网）",
-            "type": "shell",
-            "command": "flutter",
-            "args": ["build", "appbundle", "--dart-define=EVM_FLAVOR=testnet"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "group": "build",
-            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
-            "problemMatcher": []
-        },
-        {
-            "label": "Android: App Bundle（主网）",
-            "type": "shell",
-            "command": "flutter",
-            "args": ["build", "appbundle", "--dart-define=EVM_FLAVOR=mainnet"],
+            "command": "bash",
+            "args": [
+                "-lc",
+                "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build appbundle"
+            ],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "presentation": { "reveal": "always", "panel": "shared", "focus": true },

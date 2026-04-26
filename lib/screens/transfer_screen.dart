@@ -3,13 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:web3dart/web3dart.dart';
 
-import '../config/evm_environment.dart';
-import '../models/evm_network.dart';
+import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
-import '../services/evm/transfer_fee_service.dart';
 import '../theme/app_colors.dart';
+import '../services/wallet/wallet_gas_price_service.dart';
+import '../services/wallet/wallet_estimate_gas_service.dart';
 import '../widgets/pin_verify_sheet.dart';
 import 'address_book_screen.dart';
 
@@ -32,10 +31,10 @@ String _mapTransferSendError(Object e) {
       s.contains('Too Many Requests') ||
       s.contains('429') ||
       s.toLowerCase().contains('rate limit')) {
-    return '节点繁忙或限流，请稍后重试；正式使用建议配置自有 RPC（Infura / Alchemy 等）。';
+    return '服务繁忙或限流，请稍后重试。';
   }
   if (e is FormatException || s.contains('Unexpected character')) {
-    return '链上节点返回异常（多为限流或维护），请稍后重试。';
+    return '服务端返回异常，请稍后重试。';
   }
   return '发送失败: $e';
 }
@@ -44,51 +43,32 @@ String _normalizeAddrField(String raw) {
   return raw.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
 }
 
-/// [EtherAmount.fromBase10String] 的 Gwei 参数只能是整数串；带小数时用本函数转 wei。
-BigInt _decimalGweiStringToWei(String amount) {
-  final s = amount.trim();
-  if (s.isEmpty) {
-    throw const FormatException('empty gwei');
-  }
-  if (s.startsWith('-')) {
-    throw const FormatException('negative gwei');
-  }
-  final parts = s.split('.');
-  if (parts.length > 2) {
-    throw const FormatException('invalid gwei');
-  }
-  var whole = parts[0].isEmpty ? '0' : parts[0];
-  var frac = parts.length > 1 ? parts[1] : '';
-  if (frac.length > 9) {
-    frac = frac.substring(0, 9);
-  }
-  frac = frac.padRight(9, '0');
-  return BigInt.parse(whole) * BigInt.from(1000000000) + BigInt.parse(frac);
-}
-
 class _TokenItem {
-  final String symbol;
-  final String network;
-  final double balance;
-
-  /// 行情 USD 单价（如 ETH 美元价）；无行情时为 0。
-  final double priceUsd;
+  final CoinData coin;
   final Color color;
   final String mark;
-  final EvmNetworkId evmNetwork;
-  const _TokenItem(
-    this.symbol,
-    this.network,
-    this.balance,
-    this.priceUsd,
-    this.color,
-    this.mark,
-    this.evmNetwork,
-  );
+
+  const _TokenItem({
+    required this.coin,
+    required this.color,
+    required this.mark,
+  });
+
+  String get symbol => coin.symbol;
+
+  String get network => coin.network ?? '—';
+
+  double get balance => coin.balance;
+
+  /// 行情 USD 单价；无行情时为 0。
+  double get priceUsd => coin.price;
 }
 
 class TransferScreen extends StatefulWidget {
-  const TransferScreen({super.key});
+  const TransferScreen({super.key, this.initialRecipientAddress});
+
+  /// 从交易详情「转账给他/她」进入时预填收款地址（含 `0x`）。
+  final String? initialRecipientAddress;
 
   @override
   State<TransferScreen> createState() => _TransferScreenState();
@@ -116,42 +96,47 @@ class _TransferScreenState extends State<TransferScreen> {
   final TextEditingController _usd = TextEditingController();
   int _selectedTokenIndex = 0;
 
+  /// 与首页 [WalletScreen] 一致：有当前网络时默认选中该链上的资产，避免仍用全列表第 0 项（常为另一条链、余额 0）。
+  bool _syncedInitialChain = false;
+
   /// 避免金额 ⇄ USD 互写时递归触发 [TextEditingController] 监听。
   bool _syncingAmountUsd = false;
 
-  static const _transferColors = {
-    EvmNetworkId.ethereum: Color(0xFF3B82F6),
-    EvmNetworkId.base: Color(0xFF60A5FA),
-  };
-  static const _transferMarks = {
-    EvmNetworkId.ethereum: '◆',
-    EvmNetworkId.base: '◉',
-  };
+  static const _accentColors = <Color>[
+    Color(0xFF3B82F6),
+    Color(0xFF60A5FA),
+    Color(0xFF22D3AA),
+    Color(0xFFF59E0B),
+    Color(0xFFA78BFA),
+  ];
+
+  static const _marks = <String>['◆', '◉', '⬡', '◇', '◈'];
+
+  Color _accentForCoin(CoinData c) {
+    final k = c.chainId ?? c.id.hashCode;
+    return _accentColors[k.abs() % _accentColors.length];
+  }
+
+  String _markForCoin(CoinData c) {
+    final k = c.chainId ?? c.id.hashCode;
+    return _marks[k.abs() % _marks.length];
+  }
 
   List<_TokenItem> _tokensFor(WalletController w) {
-    return EvmEnvironment.nativeCoins.map((cfg) {
-      var bal = 0.0;
-      var priceUsd = 0.0;
-      final cid = EvmEnvironment.chainId(cfg.networkKey);
-      if (w.hasWallet) {
-        for (final c in w.evmCoins) {
-          if (c.chainId == cid) {
-            bal = c.balance;
-            priceUsd = c.price;
-            break;
-          }
-        }
+    final out = <_TokenItem>[];
+    for (final c in w.evmCoins) {
+      if (c.chainId == null) {
+        continue;
       }
-      return _TokenItem(
-        cfg.symbol,
-        cfg.networkLabel,
-        bal,
-        priceUsd,
-        _transferColors[cfg.networkKey]!,
-        _transferMarks[cfg.networkKey]!,
-        cfg.networkKey,
+      out.add(
+        _TokenItem(
+          coin: c,
+          color: _accentForCoin(c),
+          mark: _markForCoin(c),
+        ),
       );
-    }).toList();
+    }
+    return out;
   }
 
   double _unitUsdPrice(WalletController w) {
@@ -233,11 +218,31 @@ class _TransferScreenState extends State<TransferScreen> {
   _TokenItem _selectedToken(List<_TokenItem> tokens) =>
       tokens[_selectedTokenIndex.clamp(0, tokens.length - 1)];
 
+  static int _indexForSendChain(WalletController w, List<_TokenItem> tokens) {
+    if (tokens.isEmpty) {
+      return 0;
+    }
+    final want = w.sendChainId;
+    if (want == null) {
+      return 0;
+    }
+    for (var i = 0; i < tokens.length; i++) {
+      if (tokens[i].coin.chainId == want) {
+        return i;
+      }
+    }
+    return 0;
+  }
+
   @override
   void initState() {
     super.initState();
     _amount.addListener(_onAmountFieldChanged);
     _usd.addListener(_onUsdFieldChanged);
+    final init = widget.initialRecipientAddress?.trim();
+    if (init != null && init.isNotEmpty) {
+      _address.text = init.startsWith('0x') ? init : '0x$init';
+    }
   }
 
   @override
@@ -254,6 +259,40 @@ class _TransferScreenState extends State<TransferScreen> {
   Widget build(BuildContext context) {
     final wallet = context.watch<WalletController>();
     final tokens = _tokensFor(wallet);
+    if (tokens.isNotEmpty && !_syncedInitialChain) {
+      _syncedInitialChain = true;
+      final idx = _indexForSendChain(wallet, tokens);
+      if (idx != _selectedTokenIndex) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) {
+            return;
+          }
+          setState(() => _selectedTokenIndex = idx);
+          _syncUsdFromAmount(context.read<WalletController>());
+        });
+      }
+    }
+    if (tokens.isEmpty) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          backgroundColor: AppColors.background,
+          elevation: 0,
+          centerTitle: true,
+          title: const Text('转账', style: TextStyle(fontSize: 22)),
+        ),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              '暂无可转账资产：请确认 /api/app/chains 已返回链配置且余额接口可用。',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 15),
+            ),
+          ),
+        ),
+      );
+    }
     final sel = _selectedToken(tokens);
     final amountBalanceErr = _transferAmountBalanceError(_amount.text, sel);
     final canOpenConfirm = amountBalanceErr == null;
@@ -381,6 +420,7 @@ class _TransferScreenState extends State<TransferScreen> {
                                 builder: (_) => AddressBookScreen(
                                   symbol: sel.symbol,
                                   networkLabel: sel.network,
+                                  chainQuery: wallet.chainParamForCoin(sel.coin),
                                 ),
                               ),
                             );
@@ -524,6 +564,9 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _openTokenPicker(List<_TokenItem> tokens) async {
+    if (tokens.isEmpty) {
+      return;
+    }
     String searchQuery = '';
     final token = await showModalBottomSheet<_TokenItem>(
       context: context,
@@ -707,6 +750,12 @@ class _TransferScreenState extends State<TransferScreen> {
 
   Future<void> _openConfirmSheet(List<_TokenItem> tokens) async {
     final wallet = context.read<WalletController>();
+    if (tokens.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('暂无可转账资产')),
+      );
+      return;
+    }
     if (!wallet.hasWallet) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先创建钱包')),
@@ -725,20 +774,18 @@ class _TransferScreenState extends State<TransferScreen> {
     }
     final from = wallet.addressHex ?? '';
     final toNorm = _normalizeAddrField(_address.text);
-    try {
-      final toAddr = EthereumAddress.fromHex(toNorm);
-      final fromAddr = EthereumAddress.fromHex(
-        from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from',
-      );
-      if (toAddr.hex.toLowerCase() == fromAddr.hex.toLowerCase()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('收款地址不能与当前钱包相同，请填写对方地址')),
-        );
-        return;
-      }
-    } catch (_) {
+    if (!RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(toNorm)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址')),
+        const SnackBar(
+            content: Text('收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址')),
+      );
+      return;
+    }
+    final fromNorm =
+        from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from';
+    if (toNorm.toLowerCase() == fromNorm.toLowerCase()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('收款地址不能与当前钱包相同，请填写对方地址')),
       );
       return;
     }
@@ -939,94 +986,113 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   static const _gasQuoteRefreshInterval = Duration(seconds: 15);
 
   Timer? _gasRefreshTimer;
-  String _gasLevel = '中';
-  double _customGwei = 1;
-  final TextEditingController _customGweiController = TextEditingController();
+  String _gasLevel = '中'; // 低/中/高（对应 slow/medium/fast）
+  bool _priceLoading = true;
+  bool _limitLoading = true;
+  WalletGasPriceQuote? _gasQuote;
+  int? _gasLimit;
 
-  bool _quoteLoading = true;
-  NativeTransferFeeQuote? _resolvedQuote;
+  WalletGasPriceService get _gasSvc => WalletGasPriceService();
+  WalletEstimateGasService get _estimateGasSvc => WalletEstimateGasService();
 
-  /// [isInitial]：首次打开显示「正在估算」；定时静默刷新不改变加载态，失败时保留上一次报价。
-  Future<NativeTransferFeeQuote?> _fetchQuote({required bool isInitial}) async {
-    if (!mounted) {
-      return _resolvedQuote;
-    }
+  String get _chainCode {
+    // 与 `/api/app/wallet/gasPrice`、`estimateGas`、`createTransaction` 的 `chain` 参数一致（优先后端 chainCode）。
+    return widget.wallet.chainParamForCoin(widget.sel.coin);
+  }
+
+  bool get _feeLoading => _priceLoading || _limitLoading;
+
+  Future<void> _refreshFeeData({required bool isInitial}) async {
+    if (!mounted) return;
     if (isInitial) {
-      setState(() => _quoteLoading = true);
+      setState(() {
+        _priceLoading = true;
+        _limitLoading = true;
+        _gasQuote = null;
+        _gasLimit = null;
+      });
     }
-    try {
-      final q = await widget.wallet.quoteNativeTransfer(
-        network: widget.sel.evmNetwork,
-        toHex: widget.toHexNormalized,
-        amountEther: widget.amountStr,
+
+    final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
+    final owner = widget.wallet.addressHex;
+    final amount = double.tryParse(widget.amountStr);
+    int? fromApi;
+    if (owner == null || owner.isEmpty || amount == null) {
+      fromApi = null;
+    } else {
+      final data = await _estimateGasSvc.estimateGas(
+        chain: _chainCode,
+        coin: widget.sel.symbol,
+        ownerAddress: owner.startsWith('0x') || owner.startsWith('0X') ? owner : '0x$owner',
+        toAddress: widget.toHexNormalized,
+        amount: amount,
       );
-      if (!mounted) {
-        return q;
-      }
-      final medGwei = EtherAmount.inWei(
-        q.isEip1559 ? q.tipMedWei : (q.legacyGasPriceWei ?? q.tipMedWei),
-      ).getValueInUnit(EtherUnit.gwei);
-      setState(() {
-        _resolvedQuote = q;
-        _quoteLoading = false;
-        if (_gasLevel != '自定义' && medGwei > 0) {
-          _customGwei = medGwei;
-        }
-      });
-      return q;
-    } catch (_) {
-      if (!mounted) {
-        return _resolvedQuote;
-      }
-      setState(() {
-        _quoteLoading = false;
-        if (isInitial) {
-          _resolvedQuote = null;
-        }
-      });
-      return _resolvedQuote;
+      fromApi = WalletEstimateGasService.parseGasLimit(data);
     }
+
+    final q = await qFuture;
+    if (!mounted) return;
+
+    setState(() {
+      _gasQuote = q;
+      _priceLoading = false;
+      _gasLimit = fromApi;
+      _gasLimit ??= 21000;
+      _limitLoading = false;
+    });
   }
 
   @override
   void initState() {
     super.initState();
-    unawaited(_fetchQuote(isInitial: true));
+    unawaited(_refreshFeeData(isInitial: true));
     _gasRefreshTimer = Timer.periodic(_gasQuoteRefreshInterval, (_) {
-      unawaited(_fetchQuote(isInitial: false));
+      unawaited(_refreshFeeData(isInitial: false));
     });
   }
 
   @override
   void dispose() {
     _gasRefreshTimer?.cancel();
-    _customGweiController.dispose();
     super.dispose();
   }
 
-  BigInt get _customTipWei {
-    return _decimalGweiStringToWei(_customGwei.toStringAsFixed(9));
-  }
-
-  String _gasFeeTitle(NativeTransferFeeQuote? quote) {
-    if (_quoteLoading) {
-      return '正在从节点估算…';
+  String _gasFeeTitle(WalletGasPriceQuote? quote) {
+    if (_feeLoading) {
+      return '正在获取矿工费…';
     }
     if (quote == null) {
-      return '估算失败，转出时将使用节点默认价';
+      return '获取失败，稍后重试';
     }
-    final eth = quote.approxMaxEthForLevel(_gasLevel, _customTipWei);
-    return '约 ${eth.toStringAsFixed(9)} ETH（${widget.sel.network}，上限）';
+    // 这里先展示 gwei 档位；并结合 estimateGas 返回的 gasLimit 展示约消耗（以当前币种计）。
+    final eth = _feeEthForLevel(quote, _gasLevel);
+    if (eth == null) {
+      final gwei = _gweiForLevel(quote, _gasLevel);
+      return '$gwei Gwei（${widget.sel.network}）';
+    }
+    return '约 ${eth.toStringAsFixed(8)} ${widget.sel.symbol}（${widget.sel.network}）';
   }
 
-  String _usdForLevel(NativeTransferFeeQuote? quote, String level) {
+  String _gweiForLevel(WalletGasPriceQuote quote, String level) {
+    switch (level) {
+      case '低':
+        return quote.slowGasPriceGwei.toString();
+      case '高':
+        return quote.fastGasPriceGwei.toString();
+      case '中':
+      default:
+        return quote.mediumGasPriceGwei.toString();
+    }
+  }
+
+  String _usdForLevel(WalletGasPriceQuote? quote, String level) {
     if (quote == null || widget.sel.priceUsd <= 0) {
       return '—';
     }
-    final eth = quote.approxMaxEthForLevel(
-      level,
-      level == '自定义' ? _customTipWei : BigInt.zero,
-    );
+    final eth = _feeEthForLevel(quote, level);
+    if (eth == null) {
+      return '—';
+    }
     final usd = eth * widget.sel.priceUsd;
     if (usd < 0.01) {
       return '<\$0.01';
@@ -1034,74 +1100,27 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     return '\$${usd.toStringAsFixed(2)}';
   }
 
-  Future<void> _openCustomGasDialog() async {
-    _customGweiController.text = _customGwei.toStringAsFixed(6);
-    final is1559 = _resolvedQuote?.isEip1559 ?? true;
-    final value = await showDialog<double>(
-      context: widget.sheetContext,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1F1F23),
-          title: Text(is1559 ? '自定义优先级费 (Gwei)' : '自定义 gasPrice (Gwei)'),
-          content: TextField(
-            controller: _customGweiController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              hintText: '例如 1.5',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final parsed =
-                    double.tryParse(_customGweiController.text.trim());
-                if (parsed == null || parsed <= 0) {
-                  ScaffoldMessenger.of(widget.hostContext).showSnackBar(
-                    const SnackBar(content: Text('请输入有效的 Gwei 数值')),
-                  );
-                  return;
-                }
-                Navigator.pop(context, parsed);
-              },
-              child: const Text('确认'),
-            ),
-          ],
-        );
-      },
-    );
-    if (value != null) {
-      setState(() {
-        _gasLevel = '自定义';
-        _customGwei = value;
-      });
-    }
+  double? _feeEthForLevel(WalletGasPriceQuote quote, String level) {
+    if (_gasLimit == null) return null;
+    // feeEth ≈ gasPriceGwei * 1e9 * gasLimit / 1e18 = gasPriceGwei * gasLimit / 1e9
+    final gweiStr = _gweiForLevel(quote, level);
+    final gwei = double.tryParse(gweiStr);
+    if (gwei == null || gwei <= 0) return null;
+    return (gwei * _gasLimit!) / 1e9;
   }
 
   Widget _gasCell(
-    NativeTransferFeeQuote? quote,
-    String level, {
-    bool isCustom = false,
-  }) {
+    WalletGasPriceQuote? quote,
+    String level,
+  ) {
     final isActive = _gasLevel == level;
     final gweiStr = quote == null
         ? '—'
-        : quote.gweiLabelForLevel(
-            level,
-            isCustom ? _customTipWei : BigInt.zero,
-          );
+        : _gweiForLevel(quote, level);
     return InkWell(
-      onTap: _quoteLoading
+      onTap: _feeLoading
           ? null
           : () {
-              if (isCustom) {
-                _openCustomGasDialog();
-                return;
-              }
               setState(() => _gasLevel = level);
             },
       borderRadius: BorderRadius.circular(10),
@@ -1137,7 +1156,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             ),
             const SizedBox(height: 2),
             Text(
-              gweiStr,
+              gweiStr == '—' ? '—' : '$gweiStr Gwei',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -1155,7 +1174,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final quote = _resolvedQuote;
+    final quote = _gasQuote;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1216,7 +1235,10 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
               children: [
                 _transferKvRow('矿工费', _gasFeeTitle(quote)),
                 const SizedBox(height: 10),
-                _transferKvRow('支付方式', 'ETH(${widget.sel.network})'),
+                _transferKvRow(
+                  '支付方式',
+                  '${widget.sel.symbol}（${widget.sel.network}）',
+                ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
@@ -1230,7 +1252,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                   children: [
                     Expanded(child: _gasCell(quote, '高')),
                     const SizedBox(width: 8),
-                    Expanded(child: _gasCell(quote, '自定义', isCustom: true)),
+                    const Expanded(child: SizedBox()),
                   ],
                 ),
               ],
@@ -1256,7 +1278,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Opacity(
-                    opacity: _quoteLoading ? 0.42 : 1,
+                    opacity: _feeLoading ? 0.42 : 1,
                     child: SizedBox(
                       height: 48,
                       child: DecoratedBox(
@@ -1275,11 +1297,13 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                           color: Colors.transparent,
                           child: InkWell(
                             borderRadius: BorderRadius.circular(12),
-                            onTap: _quoteLoading
+                            onTap: _feeLoading
                                 ? null
                                 : () async {
                                     final messenger = ScaffoldMessenger.of(
                                         widget.hostContext);
+                                    final host = widget.hostContext;
+                                    final wc = host.read<WalletController>();
                                     final amountStr = widget.amountStr;
                                     final amount = double.tryParse(amountStr);
                                     if (amount == null || amount <= 0) {
@@ -1296,12 +1320,11 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                     }
                                     Navigator.pop(widget.sheetContext);
                                     final ok = await PinVerifySheet.show(
-                                      widget.hostContext,
+                                      host,
                                       title: '确认转账',
                                       subtitle: '请输入 6 位 PIN 以授权本次转账。',
-                                      verify: (pin) => widget.hostContext
-                                          .read<WalletController>()
-                                          .verifyTransactionPin(pin),
+                                      verify: (pin) =>
+                                          wc.verifyTransactionPin(pin),
                                     );
                                     if (ok != true) {
                                       messenger.showSnackBar(
@@ -1310,33 +1333,96 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       );
                                       return;
                                     }
-                                    NativeTransferFeeQuote? q = _resolvedQuote;
-                                    q ??= await _fetchQuote(isInitial: false);
-                                    final tp = q?.transactionParams(
-                                      gasLevel: _gasLevel,
-                                      customPriorityWei: _customTipWei,
-                                    );
-                                    try {
-                                      final hash = await widget.wallet.sendEth(
-                                        network: widget.sel.evmNetwork,
-                                        toHex: widget.toHexNormalized,
-                                        amountEther: amountStr,
-                                        maxGas: tp?.maxGas,
-                                        gasPrice: tp?.gasPrice,
-                                        maxFeePerGas: tp?.maxFeePerGas,
-                                        maxPriorityFeePerGas:
-                                            tp?.maxPriorityFeePerGas,
-                                      );
+                                    final owner = widget.wallet.addressHex;
+                                    if (owner == null || owner.isEmpty) {
                                       messenger.showSnackBar(
-                                        SnackBar(content: Text('已广播: $hash')),
+                                        const SnackBar(
+                                            content: Text('钱包地址为空')),
                                       );
-                                      await widget.wallet.refreshBalances();
-                                      if (!widget.hostContext.mounted) {
+                                      return;
+                                    }
+                                    final gasPriceType = switch (_gasLevel) {
+                                      '低' => 'slow',
+                                      '高' => 'fast',
+                                      _ => 'medium',
+                                    };
+                                    if (!host.mounted) {
+                                      return;
+                                    }
+                                    var loadingOpen = false;
+                                    void closeLoading() {
+                                      if (!loadingOpen || !host.mounted) {
                                         return;
                                       }
-                                      // 关闭转账页，回到栈中已有的币种详情（或首页），避免再 push 一层详情导致连点返回仍是详情。
-                                      Navigator.of(widget.hostContext).pop();
+                                      loadingOpen = false;
+                                      Navigator.of(host, rootNavigator: true)
+                                          .pop();
+                                    }
+
+                                    showDialog<void>(
+                                      context: host,
+                                      barrierDismissible: false,
+                                      builder: (ctx) => const Center(
+                                        child: Card(
+                                          color: Color(0xE6222226),
+                                          child: Padding(
+                                            padding: EdgeInsets.symmetric(
+                                                horizontal: 22, vertical: 18),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                SizedBox(
+                                                  width: 22,
+                                                  height: 22,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    color: AppColors.accent,
+                                                  ),
+                                                ),
+                                                SizedBox(width: 12),
+                                                Text(
+                                                  '正在广播交易…',
+                                                  style: TextStyle(
+                                                    color:
+                                                        AppColors.textPrimary,
+                                                    fontSize: 15,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                    loadingOpen = true;
+                                    try {
+                                      if (!host.mounted) {
+                                        return;
+                                      }
+                                      final hash =
+                                          await wc.createSignBroadcastBackendTransfer(
+                                        chain: _chainCode,
+                                        coin: widget.sel.symbol,
+                                        toAddress: widget.toHexNormalized,
+                                        amount: double.parse(amountStr),
+                                        gasPriceType: gasPriceType,
+                                      );
+                                      closeLoading();
+                                      unawaited(wc.recordRecentTransferRecipient(
+                                        chain: _chainCode,
+                                        address: widget.toHexNormalized,
+                                      ));
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                            content: Text('已广播: $hash')),
+                                      );
+                                      await wc.refreshBalances();
+                                      if (!host.mounted) {
+                                        return;
+                                      }
+                                      Navigator.of(host).pop();
                                     } catch (e) {
+                                      closeLoading();
                                       messenger.showSnackBar(
                                         SnackBar(
                                           content:

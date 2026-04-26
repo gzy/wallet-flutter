@@ -4,8 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../config/evm_environment.dart';
-import '../models/evm_network.dart';
+import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
 
@@ -17,14 +16,22 @@ class ReceiveScreen extends StatefulWidget {
 }
 
 class _ReceiveScreenState extends State<ReceiveScreen> {
-  static const _receiveColors = {
-    EvmNetworkId.ethereum: Color(0xFF6B7280),
-    EvmNetworkId.base: Color(0xFF60A5FA),
-  };
+  static const _receiveAccentColors = <Color>[
+    Color(0xFF6B7280),
+    Color(0xFF60A5FA),
+    Color(0xFF22D3AA),
+    Color(0xFFF59E0B),
+    Color(0xFFA78BFA),
+  ];
 
-  late EvmNetworkId _receiveNetwork;
+  int? _receiveChainId;
   bool _copied = false;
   final GlobalKey _shareButtonKey = GlobalKey();
+
+  Color _accentForCoin(CoinData c) {
+    final k = c.chainId ?? c.id.hashCode;
+    return _receiveAccentColors[k.abs() % _receiveAccentColors.length];
+  }
 
   Rect _sharePositionRect() {
     final ctx = _shareButtonKey.currentContext;
@@ -57,48 +64,61 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   void initState() {
     super.initState();
-    _receiveNetwork = EvmEnvironment.nativeCoins.first.networkKey;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
       }
       final w = context.read<WalletController>();
-      setState(() => _receiveNetwork = w.sendNetwork);
+      setState(() {
+        _receiveChainId = w.sendChainId;
+      });
     });
   }
 
-  String _assetTitleLine(EvmNativeCoinConfig cfg) {
-    if (cfg.networkKey == EvmNetworkId.base) {
-      return '${cfg.symbol} (${cfg.networkLabel})';
+  String _titleLineForCoin(CoinData c) {
+    final sym = c.symbol;
+    final net = (c.network ?? '').trim();
+    final name = c.name.trim();
+    if (net.isEmpty) {
+      return sym;
     }
-    return '${cfg.symbol} (${cfg.name} ${cfg.networkLabel})';
+    if (name.isNotEmpty && name.toUpperCase() != sym.toUpperCase()) {
+      return '$sym ($name · $net)';
+    }
+    return '$sym ($net)';
   }
 
   List<_TokenOption> _tokenOptionsFor(WalletController w) {
-    return EvmEnvironment.nativeCoins.map((cfg) {
-      var bal = 0.0;
-      final cid = EvmEnvironment.chainId(cfg.networkKey);
-      for (final c in w.evmCoins) {
-        if (c.chainId == cid) {
-          bal = c.balance;
-          break;
-        }
+    final out = <_TokenOption>[];
+    for (final c in w.evmCoins) {
+      if (c.chainId == null) {
+        continue;
       }
-      return _TokenOption(
-        networkKey: cfg.networkKey,
-        symbol: cfg.symbol,
-        network: cfg.networkLabel,
-        titleLine: _assetTitleLine(cfg),
-        balance: bal,
-        color: _receiveColors[cfg.networkKey]!,
+      out.add(
+        _TokenOption(
+          chainId: c.chainId!,
+          symbol: c.symbol,
+          network: c.network ?? '—',
+          titleLine: _titleLineForCoin(c),
+          balance: c.balance,
+          color: _accentForCoin(c),
+        ),
       );
-    }).toList();
+    }
+    return out;
   }
 
   _TokenOption _currentToken(WalletController w) {
     final opts = _tokenOptionsFor(w);
+    if (opts.isEmpty) {
+      throw StateError('no token options');
+    }
+    final want = _receiveChainId;
+    if (want == null) {
+      return opts.first;
+    }
     return opts.firstWhere(
-      (o) => o.networkKey == _receiveNetwork,
+      (o) => o.chainId == want,
       orElse: () => opts.first,
     );
   }
@@ -121,6 +141,27 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             child: Text(
               '请先创建或导入钱包',
               style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (wallet.evmCoins.isEmpty) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          backgroundColor: AppColors.background,
+          elevation: 0,
+          title: const Text('收款', style: TextStyle(fontSize: 18)),
+        ),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              '暂无可收款资产：请确认 /api/app/chains 已返回链配置且余额接口可用。',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 15),
             ),
           ),
         ),
@@ -485,7 +526,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   Future<void> _openTokenPicker(WalletController wallet) async {
     String searchQuery = '';
-    final picked = await showModalBottomSheet<EvmNetworkId>(
+    final picked = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -589,7 +630,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                           return ListTile(
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 4),
-                            onTap: () => Navigator.pop(context, t.networkKey),
+                            onTap: () => Navigator.pop(context, t.chainId),
                             leading: CircleAvatar(
                               radius: 20,
                               backgroundColor: t.color,
@@ -639,13 +680,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       },
     );
     if (picked != null) {
-      setState(() => _receiveNetwork = picked);
+      setState(() => _receiveChainId = picked);
     }
   }
 }
 
 class _TokenOption {
-  final EvmNetworkId networkKey;
+  final int chainId;
   final String symbol;
   final String network;
   /// 主卡片展示，如 `ETH (Ethereum Sepolia)`。
@@ -653,7 +694,7 @@ class _TokenOption {
   final double balance;
   final Color color;
   const _TokenOption({
-    required this.networkKey,
+    required this.chainId,
     required this.symbol,
     required this.network,
     required this.titleLine,

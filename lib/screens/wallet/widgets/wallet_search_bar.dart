@@ -1,46 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../config/evm_environment.dart';
-import '../../../models/evm_network.dart';
+import '../../../models/app_chain_config.dart';
 import '../../../providers/wallet_controller.dart';
 import '../../../theme/app_colors.dart';
 
-String _networkPillLabel(EvmNetworkId id) {
-  for (final c in EvmEnvironment.nativeCoins) {
-    if (c.networkKey == id) {
-      return c.networkLabel;
+String _networkPillLabel(WalletController wc) {
+  final id = wc.sendChainId;
+  if (id == null) {
+    return '网络';
+  }
+  for (final c in wc.backendChains) {
+    if (c.chainType.toUpperCase() != 'EVM') {
+      continue;
+    }
+    if (int.tryParse(c.chainId) == id) {
+      final name = c.chainName.trim();
+      return name.isEmpty ? 'Chain $id' : name;
     }
   }
-  return id.shortLabel;
+  return 'Chain $id';
 }
 
-Color _networkAvatarColor(EvmNetworkId id) {
-  return switch (id) {
-    EvmNetworkId.ethereum => const Color(0xFF3B82F6),
-    EvmNetworkId.base => const Color(0xFF60A5FA),
-  };
+Color _chainAccentColor(int chainId) {
+  const colors = <Color>[
+    Color(0xFF3B82F6),
+    Color(0xFF60A5FA),
+    Color(0xFF22D3AA),
+    Color(0xFFF59E0B),
+    Color(0xFFA78BFA),
+  ];
+  return colors[chainId.abs() % colors.length];
 }
 
-String _networkAvatarMark(EvmNetworkId id) {
-  return switch (id) {
-    EvmNetworkId.ethereum => '◆',
-    EvmNetworkId.base => '◉',
-  };
+String _chainAvatarMark(int chainId) {
+  const marks = <String>['◆', '◉', '⬡', '◇', '◈'];
+  return marks[chainId.abs() % marks.length];
 }
 
 /// 样式对齐 [TransferScreen] 内「选择币种」底部弹层（圆角、深色底、标题行、列表卡片）。
-Future<EvmNetworkId?> showWalletNetworkPicker(BuildContext context) {
+Future<int?> showWalletNetworkPicker(BuildContext context) {
   final wc = context.read<WalletController>();
-  final current = wc.sendNetwork;
-  final options = <EvmNetworkId>[];
-  for (final c in EvmEnvironment.nativeCoins) {
-    if (!options.contains(c.networkKey)) {
-      options.add(c.networkKey);
+  final current = wc.sendChainId;
+  final options = <AppChainConfig>[];
+  for (final c in wc.backendChains) {
+    if (c.chainType.toUpperCase() != 'EVM') {
+      continue;
     }
+    if (c.chainId.isEmpty) {
+      continue;
+    }
+    if (c.status != null && c.status != 1) {
+      continue;
+    }
+    options.add(c);
   }
 
-  return showModalBottomSheet<EvmNetworkId>(
+  return showModalBottomSheet<int>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -88,9 +104,11 @@ Future<EvmNetworkId?> showWalletNetworkPicker(BuildContext context) {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                   itemCount: options.length,
                   itemBuilder: (context, index) {
-                    final id = options[index];
-                    final cfg = EvmEnvironment.nativeCoins
-                        .firstWhere((c) => c.networkKey == id);
+                    final cfg = options[index];
+                    final id = int.tryParse(cfg.chainId);
+                    if (id == null) {
+                      return const SizedBox.shrink();
+                    }
                     final selected = id == current;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
@@ -118,9 +136,9 @@ Future<EvmNetworkId?> showWalletNetworkPicker(BuildContext context) {
                               children: [
                                 CircleAvatar(
                                   radius: 21,
-                                  backgroundColor: _networkAvatarColor(id),
+                                  backgroundColor: _chainAccentColor(id),
                                   child: Text(
-                                    _networkAvatarMark(id),
+                                    _chainAvatarMark(id),
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w700,
@@ -135,7 +153,7 @@ Future<EvmNetworkId?> showWalletNetworkPicker(BuildContext context) {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        cfg.networkLabel,
+                                        cfg.chainName,
                                         style: const TextStyle(
                                           fontSize: 17,
                                           color: AppColors.textPrimary,
@@ -144,7 +162,7 @@ Future<EvmNetworkId?> showWalletNetworkPicker(BuildContext context) {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        'EVM · Chain ${id.chainId}',
+                                        'EVM · Chain ${cfg.chainId}',
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: AppColors.textSecondary,
@@ -225,7 +243,7 @@ class WalletSearchBar extends StatelessWidget {
           const SizedBox(width: 12),
           Consumer<WalletController>(
             builder: (context, wc, _) {
-              final label = _networkPillLabel(wc.sendNetwork);
+              final label = _networkPillLabel(wc);
               return Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -235,7 +253,7 @@ class WalletSearchBar extends StatelessWidget {
                     if (!context.mounted || picked == null) {
                       return;
                     }
-                    context.read<WalletController>().setSendNetwork(picked);
+                    context.read<WalletController>().setSendChainId(picked);
                   },
                   child: Container(
                     constraints: const BoxConstraints(maxWidth: 132),

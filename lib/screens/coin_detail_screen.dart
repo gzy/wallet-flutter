@@ -1,19 +1,17 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:web3dart/web3dart.dart';
-
-import '../config/evm_environment.dart';
 import '../models/chain_transaction_vo.dart';
 import '../models/coin_data.dart';
-import '../models/evm_network.dart';
 import '../providers/wallet_controller.dart';
-import '../services/evm/blockscout_account_tx_service.dart';
 import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
 import 'flash_screen.dart';
 import 'receive_screen.dart';
 import 'transfer_screen.dart';
+import 'wallet_transaction_detail_screen.dart';
 
 CoinData _liveCoin(WalletController wc, CoinData initial) {
   for (final c in wc.evmCoins) {
@@ -37,40 +35,74 @@ String _walletAddressSubtitle(WalletController wc) {
   return short;
 }
 
-String _shortTxHash(String hash) {
-  final h = hash.startsWith('0x') ? hash : '0x$hash';
-  if (h.length <= 18) {
-    return h;
-  }
-  return '${h.substring(0, 10)}…${h.substring(h.length - 8)}';
+/// 交易历史列表右侧日期（与设计稿 `yyyy-MM-dd` 一致）。
+String _formatTxHistoryDate(DateTime t) {
+  final x = t.toLocal();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${x.year}-${two(x.month)}-${two(x.day)}';
 }
 
-String _formatTxListTime(DateTime t) {
-  final now = DateTime.now();
-  final d = DateTime(t.year, t.month, t.day);
-  final today = DateTime(now.year, now.month, now.day);
-  final hm =
-      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-  if (d == today) {
-    return '今天 $hm';
+String _midTruncAddrForTxList(String raw) {
+  final a = raw.trim().startsWith('0x') ? raw.trim() : '0x${raw.trim()}';
+  if (a.length <= 22) {
+    return a;
   }
-  return '${t.month}/${t.day} $hm';
+  return '${a.substring(0, 10)}…${a.substring(a.length - 10)}';
 }
 
-String _shortAddr(String raw) {
-  final a = raw.trim();
-  if (a.isEmpty) {
-    return '';
+Uri? _joinExplorerUrl(String? prefix, String pathTail) {
+  final p = prefix?.trim();
+  if (p == null || p.isEmpty) {
+    return null;
   }
-  final s = a.startsWith('0x') ? a : '0x$a';
-  if (s.length <= 14) {
-    return s;
+  final t = pathTail.trim();
+  if (t.isEmpty) {
+    return null;
   }
-  return '${s.substring(0, 8)}…${s.substring(s.length - 4)}';
+  final b = p.endsWith('/') ? p : '$p/';
+  return Uri.tryParse('$b$t');
 }
 
-/// 确认数低于此值视为「待确认」（与常见 12 块近似确认习惯一致，可调）。
-const int _kTxPendingConfirmationsThreshold = 12;
+String _coinNetworkSubtitle(CoinData live) {
+  final n = (live.network ?? '').trim();
+  final c = live.chainId;
+  if (n.isNotEmpty && c != null) {
+    return '$n · Chain $c';
+  }
+  if (n.isNotEmpty) {
+    return n;
+  }
+  if (c != null) {
+    return 'Chain $c';
+  }
+  return 'EVM';
+}
+
+String _txHistorySubtitleFromTo(bool outgoing, String counter) {
+  if (counter.isEmpty) {
+    return '合约创建';
+  }
+  final body = _midTruncAddrForTxList(counter);
+  return outgoing ? 'To: $body' : 'From: $body';
+}
+
+/// 交易历史列表左侧圆标（收款向下绿箭头 / 转账向上灰箭头）。
+Widget _txHistoryCircleIcon(bool outgoing) {
+  return Container(
+    width: 44,
+    height: 44,
+    decoration: BoxDecoration(
+      color: outgoing ? AppColors.surfaceElevated : const Color(0xFF0D2F28),
+      shape: BoxShape.circle,
+    ),
+    alignment: Alignment.center,
+    child: Icon(
+      outgoing ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+      size: 22,
+      color: outgoing ? AppColors.textSecondary : const Color(0xFF10E8CF),
+    ),
+  );
+}
 
 enum _TxChipFilter {
   all,
@@ -78,31 +110,6 @@ enum _TxChipFilter {
   send,
   pending,
   gasOnly,
-}
-
-List<BlockscoutAccountTx> _visibleTransactions(
-  List<BlockscoutAccountTx> txs,
-  _TxChipFilter filter,
-  String walletHex,
-) {
-  if (txs.isEmpty) {
-    return txs;
-  }
-  return txs.where((tx) {
-    final out = tx.isOutgoing(walletHex);
-    switch (filter) {
-      case _TxChipFilter.all:
-        return true;
-      case _TxChipFilter.receive:
-        return !out;
-      case _TxChipFilter.send:
-        return out && tx.valueWei > BigInt.zero;
-      case _TxChipFilter.pending:
-        return (tx.confirmations ?? 999999) < _kTxPendingConfirmationsThreshold;
-      case _TxChipFilter.gasOnly:
-        return out && tx.valueWei == BigInt.zero;
-    }
-  }).toList();
 }
 
 String _normAddrForTx(String raw) {
@@ -177,34 +184,13 @@ String _formatApiQuantity(double? q) {
       .replaceFirst(RegExp(r'\.$'), '');
 }
 
-/// 后端 `status` 未文档化：仅将显式非 1 视为未成功展示。
+/// 后端 `status`：`0` / `1` 视为成功，其余视为失败态展示。
 bool _apiTxLooksSuccessful(ChainTransactionVo tx) {
   final s = tx.status;
-  if (s == null || s == 1) {
+  if (s == null || s == 0 || s == 1) {
     return true;
   }
   return false;
-}
-
-String _formatTxEthAmount(BigInt wei) {
-  try {
-    final v = EtherAmount.inWei(wei).getValueInUnit(EtherUnit.ether);
-    if (v == 0) {
-      return '0';
-    }
-    if (v.abs() >= 1) {
-      return v
-          .toStringAsFixed(5)
-          .replaceFirst(RegExp(r'0+$'), '')
-          .replaceFirst(RegExp(r'\.$'), '');
-    }
-    return v
-        .toStringAsFixed(6)
-        .replaceFirst(RegExp(r'0+$'), '')
-        .replaceFirst(RegExp(r'\.$'), '');
-  } catch (_) {
-    return '—';
-  }
 }
 
 class CoinDetailScreen extends StatefulWidget {
@@ -216,22 +202,19 @@ class CoinDetailScreen extends StatefulWidget {
 }
 
 class _CoinDetailScreenState extends State<CoinDetailScreen> {
-  final BlockscoutAccountTxService _txService = BlockscoutAccountTxService();
   final WalletTransactionService _txDetailService = WalletTransactionService();
 
   /// 非 `null` 表示已成功走过后端列表接口（含空列表）。
   List<ChainTransactionVo>? _txsFromApi;
-  List<BlockscoutAccountTx> _txsFromScout = const [];
   bool _txLoading = false;
   String? _txError;
   int _txRequestGen = 0;
   _TxChipFilter _txFilter = _TxChipFilter.all;
+  bool _txShowTransactionsTab = true;
 
-  bool _txCompositeEmpty() =>
-      _txsFromApi != null ? _txsFromApi!.isEmpty : _txsFromScout.isEmpty;
+  bool _txCompositeEmpty() => _txsFromApi != null ? _txsFromApi!.isEmpty : true;
 
-  bool _txHasRows() =>
-      _txsFromApi != null ? _txsFromApi!.isNotEmpty : _txsFromScout.isNotEmpty;
+  bool _txHasRows() => _txsFromApi != null ? _txsFromApi!.isNotEmpty : false;
 
   @override
   void initState() {
@@ -245,15 +228,13 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     final wc = context.read<WalletController>();
     final addr = wc.addressHex;
     final live = _liveCoin(wc, widget.coin);
-    final evmNet = EvmEnvironment.networkIdForChainId(live.chainId);
     final gen = ++_txRequestGen;
     if (!mounted) {
       return;
     }
-    if (addr == null || evmNet == null) {
+    if (addr == null || live.chainId == null) {
       setState(() {
         _txsFromApi = null;
-        _txsFromScout = const [];
         _txLoading = false;
         _txError = null;
       });
@@ -266,8 +247,32 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       }
     });
     try {
-      final chain = wc.backendChainParam(evmNet);
+      final chain = wc.chainParamForCoin(live);
+      if (chain.isEmpty) {
+        throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
+      }
       final address = addr.startsWith('0x') ? addr : '0x$addr';
+      final cache = wc.localCache;
+      final scope = cache?.transactionScopeKey(address, chain, live.symbol);
+      if (cache != null && scope != null) {
+        try {
+          final cached = await cache.getTransactionHistory(scope);
+          if (!mounted || gen != _txRequestGen) {
+            return;
+          }
+          // 仅有「有内容的缓存」才先画屏；空列表不抢占 UI，继续走接口，避免先显示全空
+          if (cached != null && cached.isNotEmpty) {
+            setState(() {
+              _txsFromApi = cached;
+              _txLoading = false;
+              _txError = null;
+            });
+          }
+        } catch (_) {
+          // 缓存读失败不能阻塞拉取接口
+        }
+      }
+
       final apiList = await _txDetailService.fetchTransactionHistory(
         address: address,
         chain: chain,
@@ -277,48 +282,54 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         return;
       }
       if (apiList != null) {
-        setState(() {
-          _txsFromApi = apiList;
-          _txsFromScout = const [];
-          _txLoading = false;
-        });
-        return;
-      }
-
-      final chainId = live.chainId;
-      if (chainId != null && wc.backendHasEvmChainId(chainId)) {
-        if (!mounted || gen != _txRequestGen) {
-          return;
+        if (cache != null && scope != null) {
+          unawaited(cache.replaceTransactionHistory(scope, apiList));
         }
         setState(() {
-          _txsFromApi = const [];
-          _txsFromScout = const [];
+          _txsFromApi = apiList;
           _txLoading = false;
+          _txError = null;
         });
-        return;
-      }
-
-      final root = EvmEnvironment.blockscoutApiRoot(evmNet);
-      if (root == null) {
+      } else {
+        List<ChainTransactionVo>? fromDisk;
+        if (cache != null && scope != null) {
+          try {
+            fromDisk = await cache.getTransactionHistory(scope);
+          } catch (_) {
+            fromDisk = null;
+          }
+        }
         setState(() {
-          _txsFromApi = null;
-          _txsFromScout = const [];
+          if (fromDisk != null) {
+            _txsFromApi = fromDisk;
+            _txError = '网络异常，已显示本地缓存。';
+          } else {
+            _txsFromApi = const [];
+            _txError = '交易记录暂不可用，请检查网络。';
+          }
           _txLoading = false;
         });
-        return;
       }
-      final list = await _txService.fetchTxList(apiRoot: root, address: addr);
-      if (!mounted || gen != _txRequestGen) {
-        return;
-      }
-      setState(() {
-        _txsFromApi = null;
-        _txsFromScout = list;
-        _txLoading = false;
-      });
     } catch (e) {
       if (!mounted || gen != _txRequestGen) {
         return;
+      }
+      final cache = wc.localCache;
+      if (cache != null) {
+        try {
+          final chain2 = wc.chainParamForCoin(live);
+          final ad = addr.startsWith('0x') ? addr : '0x$addr';
+          final sc = cache.transactionScopeKey(ad, chain2, live.symbol);
+          final fromDisk = await cache.getTransactionHistory(sc);
+          if (fromDisk != null) {
+            setState(() {
+              _txsFromApi = fromDisk;
+              _txError = '网络异常，已显示本地缓存。';
+              _txLoading = false;
+            });
+            return;
+          }
+        } catch (_) {}
       }
       setState(() {
         _txError = e.toString();
@@ -337,26 +348,68 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     await _loadTxs();
   }
 
-  Future<void> _openExplorerTx(EvmNetworkId net, String hash) async {
-    final uri = Uri.parse(EvmEnvironment.explorerTxUrl(net, hash));
+  Future<void> _openExplorerTxForCoin(CoinData live, String rawHash) async {
+    final h = rawHash.trim().startsWith('0x') ? rawHash.trim() : '0x${rawHash.trim()}';
+    final link = _joinExplorerUrl(live.txUrlPrefix, h);
+    if (link == null) {
+      return;
+    }
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await launchUrl(link, mode: LaunchMode.externalApplication);
     } catch (_) {}
   }
 
-  Future<void> _openExplorerAddress(EvmNetworkId net, String address) async {
-    final uri = Uri.parse(EvmEnvironment.explorerAddressUrl(net, address));
+  Future<void> _openExplorerAddressForCoin(CoinData live, String rawAddr) async {
+    final a = rawAddr.trim().startsWith('0x') ? rawAddr.trim() : '0x${rawAddr.trim()}';
+    final link = _joinExplorerUrl(live.addressUrlPrefix, a);
+    if (link == null) {
+      return;
+    }
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await launchUrl(link, mode: LaunchMode.externalApplication);
     } catch (_) {}
   }
 
-  Future<void> _onTapTransaction(
-    EvmNetworkId evmNet,
+  /// 列表底部「在区块浏览器中查看」：优先用接口返回的 [ChainTransactionVo.addressLinkPrefix]。
+  Future<void> _openHistoryExplorerAddress(
+    WalletController wc,
     CoinData live,
-    String rawTxHash,
+    bool useApiList,
+    List<ChainTransactionVo> apiVisible,
   ) async {
+    final hex = wc.addressHex;
+    if (hex == null) {
+      return;
+    }
+    final normalized = hex.startsWith('0x') ? hex : '0x$hex';
+    if (useApiList && apiVisible.isNotEmpty) {
+      final p = apiVisible.first.addressLinkPrefix?.trim();
+      if (p != null && p.isNotEmpty) {
+        final uri = Uri.tryParse(
+          p.endsWith('/') ? '$p$normalized' : '$p/$normalized',
+        );
+        if (uri != null) {
+          try {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
+          } catch (_) {}
+          return;
+        }
+      }
+    }
+    await _openExplorerAddressForCoin(live, normalized);
+  }
+
+  /// [apiListRow] 来自 `transactionHistory` 时，若 [ChainTransactionVo.walletHistoryRowIncludesDetail] 为真则不再请求详情接口。
+  Future<void> _onTapTransaction(
+    CoinData live,
+    String rawTxHash, {
+    ChainTransactionVo? apiListRow,
+  }) async {
     final wc = context.read<WalletController>();
+    if (apiListRow != null && apiListRow.walletHistoryRowIncludesDetail) {
+      _openWalletTransactionDetail(wc, live, rawTxHash, apiListRow);
+      return;
+    }
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -365,7 +418,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ),
     );
     final h = rawTxHash.startsWith('0x') ? rawTxHash : '0x$rawTxHash';
-    final chain = wc.backendChainParam(evmNet);
+    final chain = wc.chainParamForCoin(live);
     final detail = await _txDetailService.fetchTransactionDetail(
       txHash: h,
       chain: chain,
@@ -376,108 +429,38 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     }
     Navigator.of(context).pop();
     if (detail == null) {
-      await _openExplorerTx(evmNet, rawTxHash);
+      await _openExplorerTxForCoin(live, rawTxHash);
       return;
     }
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    _openWalletTransactionDetail(wc, live, rawTxHash, detail);
+  }
+
+  void _openWalletTransactionDetail(
+    WalletController wc,
+    CoinData live,
+    String rawTxHash,
+    ChainTransactionVo detail,
+  ) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => WalletTransactionDetailScreen(
+          detail: detail,
+          coin: live,
+          rawTxHash: rawTxHash,
+          walletHex: wc.addressHex,
+        ),
       ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.viewInsetsOf(ctx).bottom,
-            ),
-            child: SingleChildScrollView(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      '交易详情',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    _txDetailRow('网络', detail.chainName ?? detail.chain ?? '—'),
-                    _txDetailRow('方向', detail.fundDirection ?? '—'),
-                    _txDetailRow(
-                      '数量',
-                      detail.quantity != null
-                          ? '${detail.quantity} ${detail.crypto ?? live.symbol}'
-                          : '—',
-                    ),
-                    _txDetailRow('从', detail.fromAddress ?? '—'),
-                    _txDetailRow('至', detail.toAddress ?? '—'),
-                    _txDetailRow('区块', detail.blockNumber ?? '—'),
-                    _txDetailRow(
-                      '时间',
-                      detail.transactionTime != null
-                          ? _formatTxListTime(detail.transactionTime!.toLocal())
-                          : '—',
-                    ),
-                    _txDetailRow(
-                      '手续费',
-                      detail.transactionFee != null
-                          ? '${detail.transactionFee} ${detail.feeCrypto ?? ''}'
-                              .trim()
-                          : '—',
-                    ),
-                    _txDetailRow('状态', detail.status?.toString() ?? '—'),
-                    if (detail.protocol != null && detail.protocol!.isNotEmpty)
-                      _txDetailRow('协议', detail.protocol!),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _openExplorerTx(evmNet, rawTxHash);
-                      },
-                      child: const Text('在区块浏览器中打开'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
-  Widget _txDetailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 56,
-            child: Text(
-              label,
-              style: const TextStyle(color: AppColors.textMuted, fontSize: 13),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 14,
-              ),
-            ),
-          ),
-        ],
-      ),
+  void _showMoreSheet({
+    required CoinData live,
+  }) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      builder: (_) => _CoinDetailMoreSheet(live: live),
     );
   }
 
@@ -485,18 +468,14 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   Widget build(BuildContext context) {
     final wc = context.watch<WalletController>();
     final live = _liveCoin(wc, widget.coin);
-    final evmNet = EvmEnvironment.networkIdForChainId(live.chainId);
+    final hasChain = live.chainId != null;
     final subtitle = _walletAddressSubtitle(wc);
     final walletHex = wc.addressHex;
     final useApiList = _txsFromApi != null;
     final visibleTxsApi = (walletHex == null || !useApiList)
         ? const <ChainTransactionVo>[]
         : _visibleApiTransactions(_txsFromApi!, _txFilter, walletHex);
-    final visibleTxsScout = (walletHex == null || useApiList)
-        ? const <BlockscoutAccountTx>[]
-        : _visibleTransactions(_txsFromScout, _txFilter, walletHex);
-    final filterEmpty =
-        useApiList ? visibleTxsApi.isEmpty : visibleTxsScout.isEmpty;
+    final filterEmpty = useApiList ? visibleTxsApi.isEmpty : true;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -505,11 +484,24 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         centerTitle: true,
         title: Text(live.symbol,
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-        actions: const [
-          Icon(Icons.tune, color: AppColors.textPrimary, size: 22),
-          SizedBox(width: 12),
-          Icon(Icons.more_vert, color: AppColors.textPrimary, size: 22),
-          SizedBox(width: 8),
+        actions: [
+          IconButton(
+            onPressed: () {},
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: const Icon(Icons.tune,
+                color: AppColors.textPrimary, size: 22),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed:
+                !hasChain ? null : () => _showMoreSheet(live: live),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: const Icon(Icons.more_vert,
+                color: AppColors.textPrimary, size: 22),
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Padding(
@@ -652,86 +644,193 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                               ],
                             ),
                             const SizedBox(height: 15),
-                            const Row(
-                              children: [
-                                Text('交易',
-                                    style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w600)),
-                                SizedBox(width: 16),
-                                Text('资讯',
-                                    style: TextStyle(
-                                        fontSize: 18,
-                                        color: AppColors.textSecondary)),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            const Align(
-                              alignment: Alignment.centerLeft,
-                              child: SizedBox(
-                                width: 34,
-                                child: Divider(
-                                    thickness: 3, color: AppColors.accent),
-                              ),
-                            ),
-                            const SizedBox(height: 7),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _TagChip(
-                                    label: '全部',
-                                    selected: _txFilter == _TxChipFilter.all,
-                                    onTap: () => setState(
-                                        () => _txFilter = _TxChipFilter.all),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: _TagChip(
-                                    label: '收款',
-                                    selected:
-                                        _txFilter == _TxChipFilter.receive,
-                                    onTap: () => setState(() =>
-                                        _txFilter = _TxChipFilter.receive),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: _TagChip(
-                                    label: '转账',
-                                    selected: _txFilter == _TxChipFilter.send,
-                                    onTap: () => setState(
-                                        () => _txFilter = _TxChipFilter.send),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: _TagChip(
-                                    label: '待确认',
-                                    selected:
-                                        _txFilter == _TxChipFilter.pending,
-                                    onTap: () => setState(() =>
-                                        _txFilter = _TxChipFilter.pending),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: _TagChip(
-                                    label: '矿工费',
-                                    selected:
-                                        _txFilter == _TxChipFilter.gasOnly,
-                                    onTap: () => setState(() =>
-                                        _txFilter = _TxChipFilter.gasOnly),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
                           ],
                         ),
                       ),
                     ),
-                    if (_txLoading && _txCompositeEmpty())
+                    SliverPersistentHeader(
+                      pinned: true,
+                      delegate: _CoinDetailStickyTxHeaderDelegate(
+                        extent: _txShowTransactionsTab ? 112 : 52,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => setState(
+                                        () => _txShowTransactionsTab = true),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '交易',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w700,
+                                            color: _txShowTransactionsTab
+                                                ? AppColors.textPrimary
+                                                : AppColors.textSecondary,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        AnimatedContainer(
+                                          duration: const Duration(
+                                              milliseconds: 200),
+                                          height: 3,
+                                          width:
+                                              _txShowTransactionsTab ? 36 : 0,
+                                          decoration: BoxDecoration(
+                                            color: _txShowTransactionsTab
+                                                ? AppColors.accent
+                                                : Colors.transparent,
+                                            borderRadius:
+                                                BorderRadius.circular(2),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 24),
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => setState(
+                                        () => _txShowTransactionsTab = false),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '资讯',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w700,
+                                            color: !_txShowTransactionsTab
+                                                ? AppColors.textPrimary
+                                                : AppColors.textSecondary,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        AnimatedContainer(
+                                          duration: const Duration(
+                                              milliseconds: 200),
+                                          height: 3,
+                                          width: !_txShowTransactionsTab
+                                              ? 36
+                                              : 0,
+                                          decoration: BoxDecoration(
+                                            color: !_txShowTransactionsTab
+                                                ? AppColors.accent
+                                                : Colors.transparent,
+                                            borderRadius:
+                                                BorderRadius.circular(2),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              if (_txShowTransactionsTab) ...[
+                                const SizedBox(height: 12),
+                                SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: Row(
+                                    children: [
+                                      _TagChip(
+                                        label: '全部',
+                                        selected:
+                                            _txFilter == _TxChipFilter.all,
+                                        onTap: () => setState(() =>
+                                            _txFilter = _TxChipFilter.all),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _TagChip(
+                                        label: '收款',
+                                        selected: _txFilter ==
+                                            _TxChipFilter.receive,
+                                        onTap: () => setState(() =>
+                                            _txFilter = _TxChipFilter.receive),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _TagChip(
+                                        label: '转账',
+                                        selected:
+                                            _txFilter == _TxChipFilter.send,
+                                        onTap: () => setState(() =>
+                                            _txFilter = _TxChipFilter.send),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _TagChip(
+                                        label: '待确认',
+                                        selected: _txFilter ==
+                                            _TxChipFilter.pending,
+                                        onTap: () => setState(() =>
+                                            _txFilter = _TxChipFilter.pending),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      _TagChip(
+                                        label: '矿工费',
+                                        selected: _txFilter ==
+                                            _TxChipFilter.gasOnly,
+                                        onTap: () => setState(() =>
+                                            _txFilter = _TxChipFilter.gasOnly),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(
+                                          minWidth: 40,
+                                          minHeight: 40,
+                                        ),
+                                        icon: const Icon(
+                                          Icons.tune,
+                                          color: AppColors.textSecondary,
+                                          size: 22,
+                                        ),
+                                        onPressed: () {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                                content: Text('更多筛选开发中')),
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (!_txShowTransactionsTab)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: Center(
+                          child: Text(
+                            '资讯内容即将上线',
+                            style: TextStyle(
+                              color: AppColors.textSecondary
+                                  .withValues(alpha: 0.95),
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (_txShowTransactionsTab &&
+                        _txLoading &&
+                        _txCompositeEmpty())
                       const SliverToBoxAdapter(
                         child: Padding(
                           padding: EdgeInsets.symmetric(vertical: 36),
@@ -747,7 +846,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           ),
                         ),
                       ),
-                    if (_txError != null)
+                    if (_txShowTransactionsTab && _txError != null)
                       SliverToBoxAdapter(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
@@ -762,10 +861,10 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           ),
                         ),
                       ),
-                    if (!_txLoading &&
+                    if (_txShowTransactionsTab &&
+                        !_txLoading &&
                         _txError == null &&
                         _txCompositeEmpty() &&
-                        evmNet != null &&
                         wc.addressHex != null)
                       SliverFillRemaining(
                         hasScrollBody: false,
@@ -778,52 +877,42 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                   color: AppColors.textMuted
                                       .withValues(alpha: 0.9)),
                               const SizedBox(height: 8),
-                              const Text('暂无记录',
-                                  style: TextStyle(
-                                      color: AppColors.textSecondary,
-                                      fontSize: 18)),
-                              const SizedBox(height: 18),
-                              TextButton(
-                                onPressed: () {
-                                  final h = wc.addressHex;
-                                  if (h != null) {
-                                    _openExplorerAddress(evmNet, h);
-                                  }
-                                },
-                                child: const Text(
-                                  '在区块浏览器中查看',
-                                  style: TextStyle(
-                                      color: AppColors.accent, fontSize: 14),
-                                ),
+                              Text(
+                                !hasChain
+                                    ? '缺少链信息，无法展示交易记录'
+                                    : (live.addressUrlPrefix == null ||
+                                            live.addressUrlPrefix!.trim().isEmpty)
+                                        ? '暂无记录'
+                                        : '暂无记录',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 18),
                               ),
+                              if (hasChain &&
+                                  live.addressUrlPrefix != null &&
+                                  live.addressUrlPrefix!.trim().isNotEmpty) ...[
+                                const SizedBox(height: 18),
+                                TextButton(
+                                  onPressed: () {
+                                    final h = wc.addressHex;
+                                    if (h != null) {
+                                      _openExplorerAddressForCoin(live, h);
+                                    }
+                                  },
+                                  child: const Text(
+                                    '在区块浏览器中查看',
+                                    style: TextStyle(
+                                        color: AppColors.accent, fontSize: 14),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
                       ),
-                    if (!_txLoading &&
-                        _txError == null &&
-                        _txCompositeEmpty() &&
-                        (evmNet == null || wc.addressHex == null))
-                      SliverFillRemaining(
-                        hasScrollBody: false,
-                        child: Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.description_outlined,
-                                  size: 86,
-                                  color: AppColors.textMuted
-                                      .withValues(alpha: 0.9)),
-                              const SizedBox(height: 8),
-                              const Text('暂无记录',
-                                  style: TextStyle(
-                                      color: AppColors.textSecondary,
-                                      fontSize: 18)),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (!_txLoading &&
+                    if (_txShowTransactionsTab &&
+                        !_txLoading &&
                         _txError == null &&
                         _txHasRows() &&
                         filterEmpty)
@@ -849,21 +938,21 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           ),
                         ),
                       ),
-                    if (visibleTxsApi.isNotEmpty)
+                    if (_txShowTransactionsTab && visibleTxsApi.isNotEmpty)
                       SliverList(
                         delegate: SliverChildBuilderDelegate(
                           (context, index) {
                             final tx = visibleTxsApi[index];
                             final addr = wc.addressHex;
-                            if (addr == null || evmNet == null) {
+                            if (addr == null) {
                               return const SizedBox.shrink();
                             }
                             final outgoing = _apiTxIsOutgoing(tx, addr);
                             final counter = outgoing
                                 ? (tx.toAddress ?? '').trim()
                                 : (tx.fromAddress ?? '').trim();
-                            final counterLabel =
-                                counter.isEmpty ? '合约创建' : _shortAddr(counter);
+                            final subtitle =
+                                _txHistorySubtitleFromTo(outgoing, counter);
                             final amt = _formatApiQuantity(tx.quantity);
                             final sign = outgoing ? '-' : '+';
                             final hash = tx.txHash ?? '';
@@ -873,54 +962,39 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                               color: Colors.transparent,
                               child: InkWell(
                                 onTap: () => _onTapTransaction(
-                                  evmNet,
                                   live,
                                   hash,
+                                  apiListRow: tx,
                                 ),
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(
-                                      vertical: 12, horizontal: 4),
+                                      vertical: 14, horizontal: 2),
                                   child: Row(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      Icon(
-                                        outgoing
-                                            ? Icons.north_east
-                                            : Icons.south_west,
-                                        size: 22,
-                                        color: outgoing
-                                            ? AppColors.textSecondary
-                                            : const Color(0xFF10E8CF),
-                                      ),
-                                      const SizedBox(width: 10),
+                                      _txHistoryCircleIcon(outgoing),
+                                      const SizedBox(width: 12),
                                       Expanded(
                                         child: Column(
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              outgoing ? '转出' : '收款',
+                                              outgoing ? '转账' : '收款',
                                               style: const TextStyle(
                                                 color: AppColors.textPrimary,
                                                 fontSize: 16,
                                                 fontWeight: FontWeight.w600,
                                               ),
                                             ),
-                                            const SizedBox(height: 4),
+                                            const SizedBox(height: 6),
                                             Text(
-                                              counterLabel,
-                                              style: const TextStyle(
-                                                color: AppColors.textSecondary,
-                                                fontSize: 13,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              _shortTxHash(hash),
+                                              subtitle,
                                               style: const TextStyle(
                                                 color: AppColors.textMuted,
-                                                fontSize: 12,
+                                                fontSize: 13,
+                                                height: 1.25,
                                               ),
                                             ),
                                           ],
@@ -934,22 +1008,20 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                             '$sign$amt ${tx.crypto ?? live.symbol}',
                                             style: TextStyle(
                                               color: ok
-                                                  ? (outgoing
-                                                      ? AppColors.textPrimary
-                                                      : const Color(0xFF10E8CF))
+                                                  ? AppColors.textPrimary
                                                   : AppColors.error,
-                                              fontSize: 15,
+                                              fontSize: 16,
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
-                                          const SizedBox(height: 4),
+                                          const SizedBox(height: 6),
                                           Text(
                                             t != null
-                                                ? _formatTxListTime(t)
+                                                ? _formatTxHistoryDate(t)
                                                 : '—',
                                             style: const TextStyle(
                                               color: AppColors.textMuted,
-                                              fontSize: 12,
+                                              fontSize: 13,
                                             ),
                                           ),
                                         ],
@@ -963,112 +1035,38 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                           childCount: visibleTxsApi.length,
                         ),
                       ),
-                    if (visibleTxsScout.isNotEmpty)
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            final tx = visibleTxsScout[index];
-                            final addr = wc.addressHex;
-                            if (addr == null || evmNet == null) {
-                              return const SizedBox.shrink();
-                            }
-                            final outgoing = tx.isOutgoing(addr);
-                            final counter =
-                                outgoing ? tx.to.trim() : tx.from.trim();
-                            final counterLabel =
-                                counter.isEmpty ? '合约创建' : _shortAddr(counter);
-                            final amt = _formatTxEthAmount(tx.valueWei);
-                            final sign = outgoing ? '-' : '+';
-                            return Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () => _onTapTransaction(
-                                  evmNet,
-                                  live,
-                                  tx.hash,
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 12, horizontal: 4),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Icon(
-                                        outgoing
-                                            ? Icons.north_east
-                                            : Icons.south_west,
-                                        size: 22,
-                                        color: outgoing
-                                            ? AppColors.textSecondary
-                                            : const Color(0xFF10E8CF),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              outgoing ? '转出' : '收款',
-                                              style: const TextStyle(
-                                                color: AppColors.textPrimary,
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              counterLabel,
-                                              style: const TextStyle(
-                                                color: AppColors.textSecondary,
-                                                fontSize: 13,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              _shortTxHash(tx.hash),
-                                              style: const TextStyle(
-                                                color: AppColors.textMuted,
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.end,
-                                        children: [
-                                          Text(
-                                            '$sign$amt ${live.symbol}',
-                                            style: TextStyle(
-                                              color: tx.isSuccess
-                                                  ? (outgoing
-                                                      ? AppColors.textPrimary
-                                                      : const Color(0xFF10E8CF))
-                                                  : AppColors.error,
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _formatTxListTime(tx.timestamp),
-                                            style: const TextStyle(
-                                              color: AppColors.textMuted,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
+                    if (_txShowTransactionsTab && visibleTxsApi.isNotEmpty)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 20),
+                          child: Center(
+                            child: TextButton(
+                              onPressed: () => _openHistoryExplorerAddress(
+                                wc,
+                                live,
+                                useApiList,
+                                visibleTxsApi,
                               ),
-                            );
-                          },
-                          childCount: visibleTxsScout.length,
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '在区块浏览器中查看',
+                                    style: TextStyle(
+                                      color: AppColors.accent,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: AppColors.accent,
+                                    size: 22,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                   ],
@@ -1264,6 +1262,255 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   }
 }
 
+class _CoinDetailMoreSheet extends StatefulWidget {
+  final CoinData live;
+  const _CoinDetailMoreSheet({required this.live});
+
+  @override
+  State<_CoinDetailMoreSheet> createState() => _CoinDetailMoreSheetState();
+}
+
+class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    const sheetBg = Color(0xFF2C2F37);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 10),
+          Container(
+            decoration: const BoxDecoration(
+              color: sheetBg,
+              borderRadius: BorderRadius.all(Radius.circular(18)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        radius: 16,
+                        backgroundColor: Color(0xFF1F2229),
+                        child: Icon(Icons.account_balance_wallet_outlined,
+                            size: 18, color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.live.symbol,
+                              style: const TextStyle(
+                                  color: AppColors.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _coinNetworkSubtitle(widget.live),
+                              style: const TextStyle(
+                                  color: AppColors.textSecondary, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close,
+                            color: AppColors.textSecondary, size: 20),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF3A3E47),
+                    borderRadius: BorderRadius.all(Radius.circular(14)),
+                  ),
+                  child: Column(
+                    children: [
+                      _SheetKVRow(
+                        icon: Icons.public,
+                        label: '网络',
+                        value: (widget.live.network?.trim().isNotEmpty == true)
+                            ? widget.live.network!.trim()
+                            : '—',
+                      ),
+                      const Divider(height: 1, color: Color(0x332A2D35)),
+                      const _SheetKVRow(
+                        icon: Icons.vpn_key,
+                        label: 'Path',
+                        value: "m/44'/60'/0'/0/0",
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF3A3E47),
+                    borderRadius: BorderRadius.all(Radius.circular(14)),
+                  ),
+                  child: Column(
+                    children: [
+                      _SheetActionRow(
+                        icon: Icons.language,
+                        title: '在区块浏览器中查看',
+                        onTap: () async {
+                          final nav = Navigator.of(context);
+                          final wc = context.read<WalletController>();
+                          final h = wc.addressHex;
+                          nav.pop();
+                          if (h == null) {
+                            return;
+                          }
+                          final uri = _joinExplorerUrl(
+                            widget.live.addressUrlPrefix,
+                            h.startsWith('0x') ? h : '0x$h',
+                          );
+                          if (uri == null) {
+                            return;
+                          }
+                          try {
+                            await launchUrl(uri,
+                                mode: LaunchMode.externalApplication);
+                          } catch (_) {}
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // 用同色填满底部安全区，避免露出下面页面的按钮/空白。
+                if (bottomInset > 0) SizedBox(height: bottomInset),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetKVRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _SheetKVRow(
+      {required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(label,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 14)),
+          ),
+          Text(value,
+              style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetActionRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+  const _SheetActionRow(
+      {required this.icon, required this.title, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          height: 48,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                Icon(icon, size: 20, color: AppColors.textSecondary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(title,
+                      style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                ),
+                const Icon(Icons.chevron_right,
+                    color: AppColors.textMuted, size: 22),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 币种详情：「交易 / 资讯」+ 筛选条吸顶。
+class _CoinDetailStickyTxHeaderDelegate extends SliverPersistentHeaderDelegate {
+  _CoinDetailStickyTxHeaderDelegate({
+    required this.extent,
+    required this.child,
+  });
+
+  final double extent;
+  final Widget child;
+
+  @override
+  double get minExtent => extent;
+
+  @override
+  double get maxExtent => extent;
+
+  @override
+  Widget build(
+    BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Material(
+      color: AppColors.background,
+      surfaceTintColor: Colors.transparent,
+      elevation: overlapsContent ? 2 : 0,
+      shadowColor: Colors.black.withValues(alpha: 0.35),
+      child: SizedBox(
+        height: extent,
+        width: double.infinity,
+        child: child,
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _CoinDetailStickyTxHeaderDelegate oldDelegate) {
+    return extent != oldDelegate.extent || child != oldDelegate.child;
+  }
+}
+
 class _Diamond extends StatelessWidget {
   final double size;
   const _Diamond({required this.size});
@@ -1303,26 +1550,21 @@ class _TagChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(20),
         child: Container(
-          width: double.infinity,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: selected ? AppColors.accent : Colors.transparent,
+            color: selected ? AppColors.accent : AppColors.surface,
             border: Border.all(
               color: selected ? AppColors.accent : AppColors.borderSoft,
             ),
             borderRadius: BorderRadius.circular(20),
           ),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              label,
-              maxLines: 1,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: selected ? Colors.white : AppColors.textSecondary,
-                fontSize: 14,
-              ),
+          child: Text(
+            label,
+            maxLines: 1,
+            style: TextStyle(
+              color: selected ? Colors.white : AppColors.textSecondary,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),

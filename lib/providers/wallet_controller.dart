@@ -3,45 +3,46 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web3dart/web3dart.dart';
+import 'package:web3dart/crypto.dart' show bytesToHex, hexToBytes, hexToInt;
 
+import '../data/local/app_local_cache.dart';
 import '../models/app_chain_config.dart';
 import '../models/coin_data.dart';
-import '../models/evm_network.dart';
+import '../models/recent_recipient.dart';
 import '../models/stored_wallet.dart';
-import '../config/evm_environment.dart';
-import '../services/evm/evm_client.dart';
-import '../services/evm/send_service.dart';
-import '../services/evm/transfer_fee_service.dart';
-import '../services/evm/token_service.dart';
 import '../services/market/app_price_service.dart';
 import '../services/wallet/chains_service.dart';
 import '../services/wallet/wallet_balance_service.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
+import '../services/wallet/wallet_transfer_api_service.dart';
 
 /// 全局钱包状态：多钱包、PIN、助记词派生、EVM 余额、发送交易
 class WalletController extends ChangeNotifier {
   WalletController({
     SecureStorageService? storage,
-    TokenService? tokenService,
-    SendService? sendService,
     AppPriceService? appPriceService,
     ChainsService? chainsService,
     WalletBalanceService? walletBalanceService,
+    WalletTransferApiService? transferApi,
+    AppLocalCache? localCache,
   })  : _storage = storage ?? SecureStorageService(),
-        _tokenService = tokenService ?? TokenService(),
-        _sendService = sendService ?? SendService(),
         _appPriceService = appPriceService ?? AppPriceService(),
         _chainsService = chainsService ?? ChainsService(),
-        _walletBalanceService = walletBalanceService ?? WalletBalanceService();
+        _walletBalanceService = walletBalanceService ?? WalletBalanceService(),
+        _transferApi = transferApi ?? WalletTransferApiService(),
+        _localCache = localCache;
 
   final SecureStorageService _storage;
-  final TokenService _tokenService;
-  final SendService _sendService;
   final AppPriceService _appPriceService;
   final ChainsService _chainsService;
   final WalletBalanceService _walletBalanceService;
+  final WalletTransferApiService _transferApi;
+  final AppLocalCache? _localCache;
+
+  /// 非敏感只读缓存（Drift），供地址簿/币种详情等使用。
+  AppLocalCache? get localCache => _localCache;
 
   static const _uuid = Uuid();
 
@@ -51,14 +52,15 @@ class WalletController extends ChangeNotifier {
   String? _addressHex;
   bool _backedUp = false;
   bool _loading = false;
-  EvmNetworkId _sendNetwork = EvmNetworkId.ethereum;
+  int? _sendChainId;
   bool _pinEnabled = false;
   bool _sessionUnlocked = true;
   bool _initReady = false;
 
   List<CoinData> _evmCoins = [];
+  Set<String> _hiddenCoinIds = <String>{};
 
-  /// 启动时由 [ChainsService] 拉取，供后续对接 `/api/app/wallet/balance` 等（`chain` 参数与 [AppChainConfig.chainId] 对齐）。
+  /// 启动时由 [ChainsService] 拉取，供后续对接 `/api/app/wallet/balance` 等（`chain` 参数与 [AppChainConfig.walletApiChainQuery] 对齐）。
   List<AppChainConfig> _backendChains = [];
 
   List<AppChainConfig> get backendChains => List.unmodifiable(_backendChains);
@@ -69,8 +71,10 @@ class WalletController extends ChangeNotifier {
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
   bool get loading => _loading;
-  EvmNetworkId get sendNetwork => _sendNetwork;
+  int? get sendChainId => _sendChainId;
   List<CoinData> get evmCoins => List.unmodifiable(_evmCoins);
+  bool isCoinVisible(String coinId) => !_hiddenCoinIds.contains(coinId);
+  Set<String> get hiddenCoinIds => Set.unmodifiable(_hiddenCoinIds);
 
   List<StoredWallet> get wallets => List.unmodifiable(_wallets);
   String? get activeWalletId => _activeWalletId;
@@ -87,28 +91,93 @@ class WalletController extends ChangeNotifier {
   bool get sessionUnlocked => _sessionUnlocked;
   bool get initReady => _initReady;
 
-  void setSendNetwork(EvmNetworkId id) {
-    _sendNetwork = id;
-    notifyListeners();
+  void setSendChainId(int? chainId) {
+    if (chainId == null) {
+      _sendChainId = null;
+      notifyListeners();
+      return;
+    }
+    for (final c in _activeEvmBackendChains()) {
+      if (int.tryParse(c.chainId) == chainId) {
+        _sendChainId = chainId;
+        notifyListeners();
+        return;
+      }
+    }
   }
 
-  /// 与 `GET /api/app/chains` 返回的 `chainId` 对齐，供 `/api/app/wallet/balance` 的 `chain` 查询参数使用。
-  String _balanceChainQueryParam(EvmNetworkId networkKey) {
-    final want = EvmEnvironment.chainId(networkKey).toString();
+  void _ensureSendChainDefault() {
+    final evm = _activeEvmBackendChains().toList();
+    if (evm.isEmpty) {
+      _sendChainId = null;
+      return;
+    }
+    if (_sendChainId != null &&
+        evm.any((c) => int.tryParse(c.chainId) == _sendChainId)) {
+      return;
+    }
+    _sendChainId = int.tryParse(evm.first.chainId);
+  }
+
+  /// 与 `GET /api/app/chains` 中 EVM 项匹配（按 [AppChainConfig.chainId] 字符串比较）。
+  AppChainConfig? _appChainConfigForChainId(int? chainId) {
+    if (chainId == null) {
+      return null;
+    }
+    final want = chainId.toString();
     for (final c in _backendChains) {
       if (c.chainType.toUpperCase() != 'EVM') {
         continue;
       }
       if (c.chainId == want) {
-        return c.chainId;
+        return c;
       }
     }
-    return want;
+    return null;
   }
 
-  /// 与后端钱包接口（余额、交易详情等）的 `chain` 查询参数一致。
-  String backendChainParam(EvmNetworkId network) =>
-      _balanceChainQueryParam(network);
+  /// 与后端钱包接口（余额、交易历史/详情等）的 `chain` 查询参数一致（优先 `chainCode`）。
+  String backendChainParamForChainId(int? chainId) {
+    final hit = _appChainConfigForChainId(chainId);
+    if (hit != null) {
+      return hit.walletApiChainQuery;
+    }
+    return chainId?.toString() ?? '';
+  }
+
+  /// [CoinData] 上若已写入 [CoinData.walletApiChainQuery] 则优先；否则再按链 ID 查表。
+  String chainParamForCoin(CoinData coin) {
+    final q = coin.walletApiChainQuery?.trim();
+    if (q != null && q.isNotEmpty) {
+      return q;
+    }
+    return backendChainParamForChainId(coin.chainId);
+  }
+
+  /// 地址簿「最近」：与当前链 `chain` 查询参数一致时展示（见 [chainParamForCoin]）。
+  Future<List<RecentRecipient>> recentRecipientsForChain(String chainQuery) async {
+    final id = _activeWalletId;
+    if (id == null) {
+      return const [];
+    }
+    return _storage.readRecentRecipientsForChain(id, chainQuery);
+  }
+
+  /// 成功广播后写入，供 [recentRecipientsForChain] 使用。
+  Future<void> recordRecentTransferRecipient({
+    required String chain,
+    required String address,
+  }) async {
+    final id = _activeWalletId;
+    if (id == null) {
+      return;
+    }
+    await _storage.recordRecentRecipient(
+      walletId: id,
+      chain: chain,
+      address: address,
+    );
+  }
 
   /// 当前 [backendChains] 是否包含该 EVM 链（`status == 1` 或未填视为启用）。
   bool backendHasEvmChainId(int chainId) {
@@ -157,36 +226,58 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  double _nativeBalanceFromRows(List<WalletBalanceEntry> rows, String symbol) {
-    final s = symbol.toUpperCase();
-    for (final r in rows) {
-      if (r.crypto?.toUpperCase() == s) {
-        return r.balance;
-      }
-    }
-    return 0;
-  }
-
   Future<void> init() async {
     _initReady = false;
     notifyListeners();
     try {
+      if (kDebugMode) {
+        debugPrint('WalletController.init: start');
+      }
       _backendChains = await _chainsService.fetchChains();
+      if (_backendChains.isNotEmpty) {
+        unawaited(_localCache?.putChains(_backendChains));
+      } else {
+        final cached = await _localCache?.getChains();
+        if (cached != null && cached.isNotEmpty) {
+          _backendChains = cached;
+        }
+      }
+      _ensureSendChainDefault();
       if (kDebugMode && _backendChains.isNotEmpty) {
         debugPrint('WalletController: backend chains ${_backendChains.length}');
       }
+      if (kDebugMode) {
+        debugPrint('WalletController.init: read pin');
+      }
       _pinEnabled = await _storage.hasPin();
+      if (kDebugMode) {
+        debugPrint('WalletController.init: read wallet list');
+      }
       _wallets = await _storage.readWalletList();
+      if (kDebugMode) {
+        debugPrint('WalletController.init: reconcile legacy keys');
+      }
       await _reconcileBackedUpFromLegacyKeys();
+      if (kDebugMode) {
+        debugPrint('WalletController.init: read active wallet id');
+      }
       _activeWalletId = await _storage.getActiveWalletId();
       if (_activeWalletId == null && _wallets.isNotEmpty) {
         _activeWalletId = _wallets.first.id;
         await _storage.setActiveWalletId(_activeWalletId!);
       }
+      if (_activeWalletId != null) {
+        _hiddenCoinIds = await _storage.readHiddenCoinIdsForWallet(_activeWalletId!);
+      } else {
+        _hiddenCoinIds = <String>{};
+      }
       if (_pinEnabled) {
         _sessionUnlocked = false;
       } else {
         _sessionUnlocked = true;
+      }
+      if (kDebugMode) {
+        debugPrint('WalletController.init: load credentials');
       }
       await _loadCredentialsFromActiveMnemonic();
     } catch (e, st) {
@@ -194,6 +285,9 @@ class WalletController extends ChangeNotifier {
     } finally {
       _initReady = true;
       notifyListeners();
+      if (kDebugMode) {
+        debugPrint('WalletController.init: done');
+      }
     }
     // 已启用 PIN 且未解锁时不要在后台拉余额：会多次 notifyListeners，主线程在解锁层下仍重建整个 MainTabs。
     if (_credentials != null && (!_pinEnabled || _sessionUnlocked)) {
@@ -366,12 +460,27 @@ class WalletController extends ChangeNotifier {
     }
     await _storage.setActiveWalletId(id);
     _activeWalletId = id;
+    _hiddenCoinIds = await _storage.readHiddenCoinIdsForWallet(id);
     await _loadCredentialsFromActiveMnemonic();
     if (_credentials != null) {
       await refreshBalances();
     } else {
       notifyListeners();
     }
+  }
+
+  Future<void> setCoinVisible(String coinId, bool visible) async {
+    final id = _activeWalletId;
+    if (id == null) return;
+    final next = Set<String>.from(_hiddenCoinIds);
+    if (visible) {
+      next.remove(coinId);
+    } else {
+      next.add(coinId);
+    }
+    _hiddenCoinIds = next;
+    notifyListeners();
+    await _storage.writeHiddenCoinIdsForWallet(id, _hiddenCoinIds);
   }
 
   Future<void> renameActiveWallet(String name) async {
@@ -403,6 +512,7 @@ class WalletController extends ChangeNotifier {
       return;
     }
     await _storage.deleteWalletData(id);
+    unawaited(_localCache?.clearEvmCoinsForWallet(id));
     final next = _wallets.where((w) => w.id != id).toList();
     await _storage.writeWalletList(next);
     _wallets = next;
@@ -494,17 +604,27 @@ class WalletController extends ChangeNotifier {
     try {
       final addr = _credentials!.address;
       final addressHex = addr.hex;
-      final quotes = await _appPriceService.fetchAllPrices();
+      var quotes = await _appPriceService.fetchAllPrices();
+      if (quotes.isEmpty) {
+        final cachedQ = await _localCache?.getPriceQuotes();
+        if (cachedQ != null && cachedQ.isNotEmpty) {
+          quotes = cachedQ;
+        }
+      }
       final backendEvm = _activeEvmBackendChains().toList();
+      var anyBalanceRequestOk = backendEvm.isEmpty;
       final coins = <CoinData>[];
       if (backendEvm.isNotEmpty) {
         final seen = <String>{};
         for (final chainCfg in backendEvm) {
-          final chainParam = chainCfg.chainId;
+          final chainParam = chainCfg.walletApiChainQuery;
           final remote = await _walletBalanceService.fetchBalances(
             address: addressHex,
             chain: chainParam,
           );
+          if (remote != null) {
+            anyBalanceRequestOk = true;
+          }
           final chainIdInt = int.tryParse(chainCfg.chainId);
           if (remote != null && remote.isNotEmpty) {
             for (final row in remote) {
@@ -524,9 +644,9 @@ class WalletController extends ChangeNotifier {
                 }
               }
               final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-              final q = quotes[pair];
-              final price = q?.price ?? 0;
-              final change = q?.change24h ?? 0;
+              final q = AppPriceService.resolveQuote(sym, quotes[pair]);
+              final price = q.price;
+              final change = q.change24h;
               final bal = row.balance;
               coins.add(
                 CoinData(
@@ -536,6 +656,9 @@ class WalletController extends ChangeNotifier {
                   icon: _cryptoListIcon(sym),
                   network: chainCfg.chainName,
                   chainId: chainIdInt,
+                  walletApiChainQuery: chainParam,
+                  txUrlPrefix: chainCfg.txUrlPrefix,
+                  addressUrlPrefix: chainCfg.addressUrlPrefix,
                   price: price,
                   priceChange24h: change,
                   balance: bal,
@@ -553,15 +676,11 @@ class WalletController extends ChangeNotifier {
               if (!seen.add(key)) {
                 continue;
               }
-              final netId = EvmEnvironment.networkIdForChainId(chainIdInt);
-              double bal = 0;
-              if (netId != null) {
-                bal = await _tokenService.getEthBalanceEther(netId, addr);
-              }
               final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-              final q = quotes[pair];
-              final price = q?.price ?? 0;
-              final change = q?.change24h ?? 0;
+              final q = AppPriceService.resolveQuote(sym, quotes[pair]);
+              final price = q.price;
+              final change = q.change24h;
+              const bal = 0.0;
               coins.add(
                 CoinData(
                   id: 'evm_${chainCfg.chainId}_$sym',
@@ -570,6 +689,9 @@ class WalletController extends ChangeNotifier {
                   icon: _cryptoListIcon(sym),
                   network: chainCfg.chainName,
                   chainId: chainIdInt,
+                  walletApiChainQuery: chainParam,
+                  txUrlPrefix: chainCfg.txUrlPrefix,
+                  addressUrlPrefix: chainCfg.addressUrlPrefix,
                   price: price,
                   priceChange24h: change,
                   balance: bal,
@@ -579,43 +701,42 @@ class WalletController extends ChangeNotifier {
             }
           }
         }
-      } else {
-        for (final cfg in EvmEnvironment.nativeCoins) {
-          final chainParam = _balanceChainQueryParam(cfg.networkKey);
-          final remote = await _walletBalanceService.fetchBalances(
-            address: addressHex,
-            chain: chainParam,
-            coin: cfg.symbol,
-          );
-          double bal;
-          if (remote == null) {
-            bal = await _tokenService.getEthBalanceEther(cfg.networkKey, addr);
-          } else {
-            bal = _nativeBalanceFromRows(remote, cfg.symbol);
+      }
+      // 无网时各链常返回 null（非抛错），下面会造出全 0 列表；用 Drift 上次快照，避免全 0 占屏、勿把好缓存写坏
+      if (backendEvm.isNotEmpty && !anyBalanceRequestOk) {
+        final wid = _activeWalletId;
+        if (wid != null) {
+          final snap = await _localCache?.getEvmCoinsForWallet(wid);
+          if (snap != null && snap.isNotEmpty) {
+            _evmCoins = snap;
+            _ensureSendChainDefault();
+            if (quotes.isNotEmpty) {
+              unawaited(_localCache?.putPriceQuotes(quotes));
+            }
+            return;
           }
-          final pair = AppPriceService.usdtPairKeyForSymbol(cfg.symbol);
-          final q = quotes[pair];
-          final price = q?.price ?? 0;
-          final change = q?.change24h ?? 0;
-          coins.add(
-            CoinData(
-              id: cfg.coinListId,
-              symbol: cfg.symbol,
-              name: cfg.name,
-              icon: cfg.icon,
-              network: cfg.networkLabel,
-              chainId: EvmEnvironment.chainId(cfg.networkKey),
-              price: price,
-              priceChange24h: change,
-              balance: bal,
-              balanceUSD: bal * price,
-            ),
-          );
         }
       }
       _evmCoins = coins;
+      _ensureSendChainDefault();
+      final wid = _activeWalletId;
+      if (wid != null) {
+        if (anyBalanceRequestOk) {
+          unawaited(_localCache?.putEvmCoinsForWallet(wid, coins));
+        }
+        if (quotes.isNotEmpty) {
+          unawaited(_localCache?.putPriceQuotes(quotes));
+        }
+      }
     } catch (e, st) {
       debugPrint('refreshBalances: $e\n$st');
+      final wid = _activeWalletId;
+      if (wid != null) {
+        final snap = await _localCache?.getEvmCoinsForWallet(wid);
+        if (snap != null && snap.isNotEmpty) {
+          _evmCoins = snap;
+        }
+      }
     } finally {
       _loading = false;
       notifyListeners();
@@ -650,54 +771,137 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  /// 估算当前原生转账矿工费（EIP-1559 优先，失败则 legacy gasPrice）。
-  Future<NativeTransferFeeQuote> quoteNativeTransfer({
-    required EvmNetworkId network,
-    required String toHex,
-    required String amountEther,
-  }) async {
-    final f = address;
-    if (f == null) {
-      throw StateError('No wallet');
+  static Map<String, dynamic> _asMap(Object? v) {
+    if (v is Map) {
+      return Map<String, dynamic>.from(v);
     }
-    final cleaned = toHex.trim().replaceAll(RegExp(r'[\s\n\r]+'), '');
-    final to = EthereumAddress.fromHex(cleaned);
-    return quoteNativeTransferForNetwork(
-      network: network,
-      from: f,
-      to: to,
-      amountEther: amountEther,
-    );
+    throw const FormatException('expected map');
   }
 
-  Future<String> sendEth({
-    required EvmNetworkId network,
-    required String toHex,
-    required String amountEther,
-    int? maxGas,
-    EtherAmount? gasPrice,
-    EtherAmount? maxFeePerGas,
-    EtherAmount? maxPriorityFeePerGas,
+  static int _readIntFromMaybeHex(Object? v) {
+    if (v is int) {
+      return v;
+    }
+    if (v is String) {
+      if (v.startsWith('0x') || v.startsWith('0X')) {
+        return int.parse(v.substring(2), radix: 16);
+      }
+      return int.parse(v);
+    }
+    if (v is num) {
+      return v.toInt();
+    }
+    throw FormatException('expected int, got $v');
+  }
+
+  static BigInt _readWeiFromMaybeHex(Object? v) {
+    if (v is int) {
+      return BigInt.from(v);
+    }
+    if (v is String) {
+      return hexToInt(v);
+    }
+    if (v is num) {
+      return BigInt.from(v.toInt());
+    }
+    throw FormatException('expected hex wei, got $v');
+  }
+
+  static Uint8List _readTxData(Object? v) {
+    if (v == null) {
+      return Uint8List(0);
+    }
+    if (v is! String) {
+      throw const FormatException('data must be hex string');
+    }
+    final s = v.trim();
+    if (s.isEmpty || s == '0x' || s == '0X') {
+      return Uint8List(0);
+    }
+    return hexToBytes(s);
+  }
+
+  static String? _readTxHashFromBroadcast(data) {
+    if (data == null) {
+      return null;
+    }
+    if (data is String) {
+      return data;
+    }
+    if (data is Map) {
+      final m = Map<String, dynamic>.from(data);
+      final keys = <String>['txHash', 'hash', 'transactionHash', 'txid'];
+      for (final k in keys) {
+        final v = m[k];
+        if (v is String && v.isNotEmpty) {
+          return v;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// 走后端 `createTransaction` + 本地 legacy 签名 + `broadcastTransaction` 广播；返回 `txHash`（若响应未提供则回退 raw）。
+  Future<String> createSignBroadcastBackendTransfer({
+    required String chain,
+    required String coin,
+    required String toAddress,
+    required num amount,
+    String? gasPriceType,
   }) async {
-    final c = _credentials;
-    if (c == null) {
+    final key = _credentials;
+    if (key == null) {
       throw StateError('No wallet');
     }
-    return _sendService.sendEth(
-      network: network,
-      credentials: c,
-      toHex: toHex,
-      amountEther: amountEther,
+    final create = await _transferApi.createTransaction(
+      chain: chain,
+      coin: coin,
+      ownerAddress: _addressHex ?? '',
+      toAddress: toAddress,
+      amount: amount,
+      gasPriceType: gasPriceType,
+    );
+    if (create == null) {
+      throw StateError('createTransaction 无响应');
+    }
+    if (create['code'] != 0) {
+      final msg = create['message']?.toString() ?? 'createTransaction 失败';
+      throw StateError(msg);
+    }
+    final d = _asMap(create['data']);
+    final to = EthereumAddress.fromHex(d['to'].toString());
+    final valueWei = _readWeiFromMaybeHex(d['value']);
+    final gasPrice = EtherAmount.inWei(_readWeiFromMaybeHex(d['gasPrice']));
+    final maxGas = _readIntFromMaybeHex(d['gasLimit']);
+    final nonce = _readIntFromMaybeHex(d['nonce']);
+    final chainId = _readIntFromMaybeHex(d['chainId']);
+    final dataBytes = _readTxData(d['data']);
+
+    final tx = Transaction(
+      to: to,
       maxGas: maxGas,
       gasPrice: gasPrice,
-      maxFeePerGas: maxFeePerGas,
-      maxPriorityFeePerGas: maxPriorityFeePerGas,
+      value: EtherAmount.inWei(valueWei),
+      data: dataBytes,
+      nonce: nonce,
     );
-  }
 
-  @override
-  void dispose() {
-    EvmRpcPool.disposeAll();
-    super.dispose();
+    final raw = signTransactionRaw(tx, key, chainId: chainId);
+    final signed = bytesToHex(raw, include0x: true);
+
+    final broad = await _transferApi.broadcastTransaction(
+      chain: chain,
+      coin: coin,
+      data: signed,
+    );
+    if (broad == null) {
+      throw StateError('broadcastTransaction 无响应');
+    }
+    if (broad['code'] != 0) {
+      final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+      throw StateError(msg);
+    }
+    final h = _readTxHashFromBroadcast(broad['data']);
+    return h ?? signed;
   }
 }

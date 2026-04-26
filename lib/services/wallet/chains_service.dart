@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../../models/app_chain_config.dart';
-import '../http/logging_http_client.dart';
+import '../http/http_clients.dart';
 import '../market/app_price_service.dart' show kMarketApiBase;
 
 /// 拉取后端已启用链列表（`GET /api/app/chains`），与 [kMarketApiBase] 同源。
@@ -15,11 +15,7 @@ class ChainsService {
   final http.Client _httpClient;
 
   static http.Client _defaultClient() {
-    final inner = http.Client();
-    if (kDebugMode) {
-      return LoggingHttpClient(inner, logName: 'Chains', maxLogBodyLength: 16000);
-    }
-    return inner;
+    return HttpClients.create(logName: 'Chains', maxLogBodyLength: 16000);
   }
 
   static Uri _uri() => Uri.parse('$kMarketApiBase/api/app/chains');

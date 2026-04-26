@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-import '../http/logging_http_client.dart';
+import '../http/http_clients.dart';
 
 /// 后端行情基址，可通过 `--dart-define=MARKET_API_BASE=https://...` 覆盖。
 ///
@@ -31,15 +31,8 @@ class AppPriceService {
   final http.Client _httpClient;
 
   static http.Client _defaultHttpClient() {
-    final inner = http.Client();
-    if (kDebugMode) {
-      return LoggingHttpClient(
-        inner,
-        logName: 'AppPrice',
-        maxLogBodyLength: 32000,
-      );
-    }
-    return inner;
+    // 只对后端域名启用 SPKI pin，其它域名走系统 CA。
+    return HttpClients.create(logName: 'AppPrice', maxLogBodyLength: 32000);
   }
 
   static Uri _allPricesUri() => Uri.parse('$kMarketApiBase/api/app/price/all');
@@ -97,4 +90,19 @@ class AppPriceService {
   /// 将原生币符号映射为接口中的交易对 key（当前列表均为 ETH → ETHUSDT）。
   static String usdtPairKeyForSymbol(String symbol) =>
       '${symbol.toUpperCase()}USDT';
+
+  /// USDT 与 USD 1:1 锚定，**不使用** `allPrice` 接口数值（避免与稳定币定义不一致）。
+  static bool isUsdT(String symbol) =>
+      symbol.toUpperCase().trim() == 'USDT';
+
+  /// 合并接口报价：USDT 固定 1 美元、24h 涨跌 0；其余用 [fromApi]，缺省为 0。
+  static AppSymbolQuote resolveQuote(String symbol, AppSymbolQuote? fromApi) {
+    if (isUsdT(symbol)) {
+      return const AppSymbolQuote(price: 1, change24h: 0);
+    }
+    if (fromApi != null) {
+      return fromApi;
+    }
+    return const AppSymbolQuote(price: 0, change24h: 0);
+  }
 }

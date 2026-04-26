@@ -1,50 +1,30 @@
 {
-    // 运行和调试下拉框里选一项即可。EVM 主/测网由 --dart-define=EVM_FLAVOR=testnet|mainnet 控制（与 lib/config/evm_environment.dart 一致）。
-    // 模拟器 / 当前默认设备：「调试 | EVM …」；仅插 USB 真机时选「USB 真机 | …」（Android / iOS 共用同一组参数）。
-    // 打包 APK/AAB：命令面板「Tasks: Run Task」选「Android: APK/App Bundle（测试网|主网）」，见 .vscode/tasks.json（launch 仍是 flutter run）。
+    // 运行和调试：链/主测网以 `GET /api/app/chains` 等后端接口为准，不再通过 EVM_FLAVOR 区分。
+    // 模拟器 / 当前默认设备：选「调试」；仅插 USB 真机时选「USB 真机 | …」。
+    // 打包 APK/AAB：命令面板「Tasks: Run Task」选「Android: APK/…」，见 .vscode/tasks.json（launch 仍是 flutter run）。
     //
     // iOS 26 真机 + Debug：DartWorker EXC_BAD_ACCESS (code=50) 多见 Xcode 26.4 LLDB（flutter/flutter#184254）；已换 Xcode 26.3 可优先用默认 LLDB。
     // 若仍崩：真机「Profile/Release」或模拟器 Debug；或 Xcode Settings → Components 重装 Device Support / Metal Toolchain。
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "调试 | EVM 测试网 (Sepolia)",
+            "name": "调试",
             "request": "launch",
-            "type": "dart",
-            "args": ["--dart-define=EVM_FLAVOR=testnet"]
+            "type": "dart"
         },
         {
-            "name": "调试 | EVM 主网",
-            "request": "launch",
-            "type": "dart",
-            "args": ["--dart-define=EVM_FLAVOR=mainnet"]
-        },
-        {
-            "name": "USB 真机 | 测试网",
+            "name": "USB 真机",
             "request": "launch",
             "type": "dart",
             "args": [
                 "--device-connection",
                 "attached",
                 "--device-timeout",
-                "20",
-                "--dart-define=EVM_FLAVOR=testnet"
+                "20"
             ]
         },
         {
-            "name": "USB 真机 | 主网",
-            "request": "launch",
-            "type": "dart",
-            "args": [
-                "--device-connection",
-                "attached",
-                "--device-timeout",
-                "20",
-                "--dart-define=EVM_FLAVOR=mainnet"
-            ]
-        },
-        {
-            "name": "USB 真机 | Profile | 测试网",
+            "name": "USB 真机 | Profile",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
@@ -52,50 +32,20 @@
                 "--device-connection",
                 "attached",
                 "--device-timeout",
-                "20",
-                "--dart-define=EVM_FLAVOR=testnet"
+                "20"
             ]
         },
         {
-            "name": "USB 真机 | Profile | 主网",
+            "name": "Profile",
             "request": "launch",
             "type": "dart",
-            "flutterMode": "profile",
-            "args": [
-                "--device-connection",
-                "attached",
-                "--device-timeout",
-                "20",
-                "--dart-define=EVM_FLAVOR=mainnet"
-            ]
+            "flutterMode": "profile"
         },
         {
-            "name": "Profile | 测试网",
+            "name": "Release",
             "request": "launch",
             "type": "dart",
-            "flutterMode": "profile",
-            "args": ["--dart-define=EVM_FLAVOR=testnet"]
-        },
-        {
-            "name": "Profile | 主网",
-            "request": "launch",
-            "type": "dart",
-            "flutterMode": "profile",
-            "args": ["--dart-define=EVM_FLAVOR=mainnet"]
-        },
-        {
-            "name": "Release | 测试网",
-            "request": "launch",
-            "type": "dart",
-            "flutterMode": "release",
-            "args": ["--dart-define=EVM_FLAVOR=testnet"]
-        },
-        {
-            "name": "Release | 主网",
-            "request": "launch",
-            "type": "dart",
-            "flutterMode": "release",
-            "args": ["--dart-define=EVM_FLAVOR=mainnet"]
+            "flutterMode": "release"
         }
     ]
 }

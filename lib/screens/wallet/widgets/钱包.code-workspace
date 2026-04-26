@@ -10,5 +10,7 @@
 			"path": "../../../../../../Downloads/UI wallet"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"java.configuration.updateBuildConfiguration": "interactive"
+	}
 }

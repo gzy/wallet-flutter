@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-import '../http/logging_http_client.dart';
+import '../http/http_clients.dart';
 import '../market/app_price_service.dart' show kMarketApiBase;
 
-/// 与 OpenAPI `POST /api/app/wallet/balance`（`WalletBalanceVO`）一致的单条余额。
+/// 与 OpenAPI `GET /api/app/wallet/balance`（`WalletBalanceVO`）一致的单条余额。
 class WalletBalanceEntry {
   const WalletBalanceEntry({
     required this.balance,
@@ -32,7 +32,7 @@ class WalletBalanceEntry {
 
 /// 后端聚合余额（与链上 RPC 二选一由 [WalletController] 决定）。
 ///
-/// OpenAPI：`POST /api/app/wallet/balance?address=&chain=`，可选 `coin`。
+/// OpenAPI：`GET /api/app/wallet/balance?address=&chain=`；`chain` 一般为后端 `chainCode`（无则 `chainId`）。可选 `coin`。
 class WalletBalanceService {
   WalletBalanceService({http.Client? httpClient})
       : _httpClient = httpClient ?? _defaultClient();
@@ -40,15 +40,7 @@ class WalletBalanceService {
   final http.Client _httpClient;
 
   static http.Client _defaultClient() {
-    final inner = http.Client();
-    if (kDebugMode) {
-      return LoggingHttpClient(
-        inner,
-        logName: 'WalletBalance',
-        maxLogBodyLength: 12000,
-      );
-    }
-    return inner;
+    return HttpClients.create(logName: 'WalletBalance', maxLogBodyLength: 12000);
   }
 
   static Uri _buildUri({
@@ -75,7 +67,7 @@ class WalletBalanceService {
   }) async {
     try {
       final res = await _httpClient
-          .post(
+          .get(
             _buildUri(
               address: address,
               chain: chain,
