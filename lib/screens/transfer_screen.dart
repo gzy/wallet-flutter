@@ -222,12 +222,12 @@ class _TransferScreenState extends State<TransferScreen> {
     if (tokens.isEmpty) {
       return 0;
     }
-    final want = w.sendChainId;
+    final want = w.sendChain;
     if (want == null) {
       return 0;
     }
     for (var i = 0; i < tokens.length; i++) {
-      if (tokens[i].coin.chainId == want) {
+      if (w.chainParamForCoin(tokens[i].coin) == want) {
         return i;
       }
     }

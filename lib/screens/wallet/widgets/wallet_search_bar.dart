@@ -6,20 +6,17 @@ import '../../../providers/wallet_controller.dart';
 import '../../../theme/app_colors.dart';
 
 String _networkPillLabel(WalletController wc) {
-  final id = wc.sendChainId;
-  if (id == null) {
-    return '网络';
+  final q = wc.sendChain;
+  if (q == null) {
+    return '全部';
   }
   for (final c in wc.backendChains) {
-    if (c.chainType.toUpperCase() != 'EVM') {
-      continue;
-    }
-    if (int.tryParse(c.chainId) == id) {
+    if (c.walletApiChainQuery == q) {
       final name = c.chainName.trim();
-      return name.isEmpty ? 'Chain $id' : name;
+      return name.isEmpty ? q : name;
     }
   }
-  return 'Chain $id';
+  return q;
 }
 
 Color _chainAccentColor(int chainId) {
@@ -39,14 +36,11 @@ String _chainAvatarMark(int chainId) {
 }
 
 /// 样式对齐 [TransferScreen] 内「选择币种」底部弹层（圆角、深色底、标题行、列表卡片）。
-Future<int?> showWalletNetworkPicker(BuildContext context) {
+Future<String?> showWalletNetworkPicker(BuildContext context) {
   final wc = context.read<WalletController>();
-  final current = wc.sendChainId;
+  final current = wc.sendChain;
   final options = <AppChainConfig>[];
   for (final c in wc.backendChains) {
-    if (c.chainType.toUpperCase() != 'EVM') {
-      continue;
-    }
     if (c.chainId.isEmpty) {
       continue;
     }
@@ -56,7 +50,7 @@ Future<int?> showWalletNetworkPicker(BuildContext context) {
     options.add(c);
   }
 
-  return showModalBottomSheet<int>(
+  return showModalBottomSheet<String?>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
@@ -102,21 +96,83 @@ Future<int?> showWalletNetworkPicker(BuildContext context) {
                 child: ListView.builder(
                   shrinkWrap: true,
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                  itemCount: options.length,
+                  itemCount: options.length + 1,
                   itemBuilder: (context, index) {
-                    final cfg = options[index];
-                    final id = int.tryParse(cfg.chainId);
-                    if (id == null) {
-                      return const SizedBox.shrink();
+                    if (index == 0) {
+                      final selected = current == null;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: () => Navigator.pop(ctx, null),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2A2D35),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: selected
+                                      ? AppColors.accent
+                                      : Colors.transparent,
+                                  width: 1.2,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const CircleAvatar(
+                                    radius: 21,
+                                    backgroundColor: Color(0xFF3A3D45),
+                                    child: Text(
+                                      '全',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Expanded(
+                                    child: Text(
+                                      '全部',
+                                      style: TextStyle(
+                                        fontSize: 17,
+                                        color: AppColors.textPrimary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  if (selected)
+                                    const Icon(
+                                      Icons.check_circle,
+                                      color: AppColors.accent,
+                                      size: 22,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
                     }
-                    final selected = id == current;
+
+                    final cfg = options[index - 1];
+                    final type = cfg.chainType.toUpperCase();
+                    final id = int.tryParse(cfg.chainId);
+                    final isEvm = type == 'EVM' && id != null;
+                    final selected = cfg.walletApiChainQuery == current;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Material(
                         color: Colors.transparent,
                         child: InkWell(
                           borderRadius: BorderRadius.circular(10),
-                          onTap: () => Navigator.pop(ctx, id),
+                          onTap: () => Navigator.pop(ctx, cfg.walletApiChainQuery),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -136,9 +192,11 @@ Future<int?> showWalletNetworkPicker(BuildContext context) {
                               children: [
                                 CircleAvatar(
                                   radius: 21,
-                                  backgroundColor: _chainAccentColor(id),
+                                  backgroundColor: isEvm
+                                      ? _chainAccentColor(id)
+                                      : const Color(0xFF3A3D45),
                                   child: Text(
-                                    _chainAvatarMark(id),
+                                    isEvm ? _chainAvatarMark(id) : '—',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w700,
@@ -162,7 +220,9 @@ Future<int?> showWalletNetworkPicker(BuildContext context) {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        'EVM · Chain ${cfg.chainId}',
+                                        isEvm
+                                            ? 'EVM · Chain ${cfg.chainId}'
+                                            : '${cfg.chainType} · ${cfg.walletApiChainQuery}',
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: AppColors.textSecondary,
@@ -250,10 +310,11 @@ class WalletSearchBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   onTap: () async {
                     final picked = await showWalletNetworkPicker(context);
-                    if (!context.mounted || picked == null) {
+                    if (!context.mounted) {
                       return;
                     }
-                    context.read<WalletController>().setSendChainId(picked);
+                    // picked==null 表示选择了「全部」
+                    context.read<WalletController>().setSendChain(picked);
                   },
                   child: Container(
                     constraints: const BoxConstraints(maxWidth: 132),

@@ -52,10 +52,15 @@ class WalletController extends ChangeNotifier {
   String? _addressHex;
   bool _backedUp = false;
   bool _loading = false;
-  int? _sendChainId;
+  /// 首页网络筛选：后端钱包接口使用的 `chain` 查询参数（优先 chainCode，缺失则 chainId 字符串）。
+  /// `null` 表示“全部网络”。
+  String? _sendChain;
   bool _pinEnabled = false;
   bool _sessionUnlocked = true;
   bool _initReady = false;
+  bool _appInBackground = false;
+  static const Duration _pinGraceDuration = Duration(minutes: 30);
+  int? _lastSessionUnlockAtMs;
 
   List<CoinData> _evmCoins = [];
   Set<String> _hiddenCoinIds = <String>{};
@@ -71,7 +76,7 @@ class WalletController extends ChangeNotifier {
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
   bool get loading => _loading;
-  int? get sendChainId => _sendChainId;
+  String? get sendChain => _sendChain;
   List<CoinData> get evmCoins => List.unmodifiable(_evmCoins);
   bool isCoinVisible(String coinId) => !_hiddenCoinIds.contains(coinId);
   Set<String> get hiddenCoinIds => Set.unmodifiable(_hiddenCoinIds);
@@ -90,16 +95,68 @@ class WalletController extends ChangeNotifier {
   bool get pinEnabled => _pinEnabled;
   bool get sessionUnlocked => _sessionUnlocked;
   bool get initReady => _initReady;
+  bool get appInBackground => _appInBackground;
 
-  void setSendChainId(int? chainId) {
-    if (chainId == null) {
-      _sendChainId = null;
+  bool _isWithinPinGrace(int nowMs) {
+    final at = _lastSessionUnlockAtMs;
+    if (at == null || at <= 0) return false;
+    return nowMs - at <= _pinGraceDuration.inMilliseconds;
+  }
+
+  Future<void> _loadPinGraceForActiveWallet() async {
+    final wid = _activeWalletId;
+    if (wid == null) {
+      _lastSessionUnlockAtMs = null;
+      return;
+    }
+    _lastSessionUnlockAtMs = await _storage.readPinSessionUnlockAtMs(wid);
+  }
+
+  /// 生命周期：进入后台/不可见时调用。
+  ///
+  /// 需求：切后台时不要显示 PIN，也不要黑屏（App 切换器里保持正常页面快照）。
+  /// 因此只标记后台态，用于在 UI 层抑制 UnlockScreen；
+  /// 同时**不**在这里把 [_sessionUnlocked] 置为 false，否则 `_HomeShell` 会渲染纯色底导致切换器快照变黑。
+  /// “上锁”的动作延迟到回前台时判断（若已超 30 分钟才真正进入锁屏态）。
+  void onAppBackgrounded() {
+    _appInBackground = true;
+    notifyListeners();
+  }
+
+  /// 生命周期：回到前台时调用。
+  ///
+  /// 规则：
+  /// - 切后台时不展示 PIN、不黑屏（保持切换器快照）
+  /// - 回前台时再判断：30 分钟内免 PIN，否则进入锁屏态要求输入 PIN
+  /// - 一直前台不自动上锁（无定时器）
+  void onAppResumed() {
+    if (!_pinEnabled || _credentials == null) {
+      if (_appInBackground) {
+        _appInBackground = false;
+        notifyListeners();
+      }
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // 回前台再决定是否需要锁屏（避免切换器黑屏/闪 PIN）
+    _sessionUnlocked = _isWithinPinGrace(now);
+    _appInBackground = false;
+    notifyListeners();
+    if (_sessionUnlocked) {
+      unawaited(refreshBalances());
+    }
+  }
+
+  void setSendChain(String? chainQuery) {
+    final q = chainQuery?.trim();
+    if (q == null || q.isEmpty) {
+      _sendChain = null;
       notifyListeners();
       return;
     }
-    for (final c in _activeEvmBackendChains()) {
-      if (int.tryParse(c.chainId) == chainId) {
-        _sendChainId = chainId;
+    for (final c in _activeBackendChains()) {
+      if (c.walletApiChainQuery == q) {
+        _sendChain = q;
         notifyListeners();
         return;
       }
@@ -107,16 +164,20 @@ class WalletController extends ChangeNotifier {
   }
 
   void _ensureSendChainDefault() {
-    final evm = _activeEvmBackendChains().toList();
-    if (evm.isEmpty) {
-      _sendChainId = null;
+    final chains = _activeBackendChains().toList();
+    if (chains.isEmpty) {
+      _sendChain = null;
       return;
     }
-    if (_sendChainId != null &&
-        evm.any((c) => int.tryParse(c.chainId) == _sendChainId)) {
+    // 默认显示「全部网络」：仅在用户已手动选择过某条链时才保持该选择。
+    // 若当前选择已不再可用（链下架/禁用），则回退到「全部」而不是强行选第一条链。
+    if (_sendChain == null) {
       return;
     }
-    _sendChainId = int.tryParse(evm.first.chainId);
+    if (chains.any((c) => c.walletApiChainQuery == _sendChain)) {
+      return;
+    }
+    _sendChain = null;
   }
 
   /// 与 `GET /api/app/chains` 中 EVM 项匹配（按 [AppChainConfig.chainId] 字符串比较）。
@@ -197,11 +258,8 @@ class WalletController extends ChangeNotifier {
     return false;
   }
 
-  Iterable<AppChainConfig> _activeEvmBackendChains() sync* {
+  Iterable<AppChainConfig> _activeBackendChains() sync* {
     for (final c in _backendChains) {
-      if (c.chainType.toUpperCase() != 'EVM') {
-        continue;
-      }
       if (c.chainId.isEmpty) {
         continue;
       }
@@ -280,6 +338,13 @@ class WalletController extends ChangeNotifier {
         debugPrint('WalletController.init: load credentials');
       }
       await _loadCredentialsFromActiveMnemonic();
+      if (_pinEnabled && _credentials != null) {
+        await _loadPinGraceForActiveWallet();
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (_isWithinPinGrace(now)) {
+          _sessionUnlocked = true;
+        }
+      }
     } catch (e, st) {
       debugPrint('WalletController.init failed: $e\n$st');
     } finally {
@@ -379,6 +444,11 @@ class WalletController extends ChangeNotifier {
     _addressHex = _credentials!.address.hex;
     _backedUp = false;
     _sessionUnlocked = true;
+    if (_pinEnabled) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _lastSessionUnlockAtMs = now;
+      unawaited(_storage.writePinSessionUnlockAtMs(id, now));
+    }
     await refreshBalances();
     notifyListeners();
   }
@@ -450,6 +520,11 @@ class WalletController extends ChangeNotifier {
     _addressHex = _credentials!.address.hex;
     _backedUp = false;
     _sessionUnlocked = true;
+    if (_pinEnabled) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _lastSessionUnlockAtMs = now;
+      unawaited(_storage.writePinSessionUnlockAtMs(id, now));
+    }
     await refreshBalances();
     notifyListeners();
   }
@@ -461,11 +536,18 @@ class WalletController extends ChangeNotifier {
     await _storage.setActiveWalletId(id);
     _activeWalletId = id;
     _hiddenCoinIds = await _storage.readHiddenCoinIdsForWallet(id);
+    if (_pinEnabled) {
+      _sessionUnlocked = false;
+    }
     await _loadCredentialsFromActiveMnemonic();
-    if (_credentials != null) {
-      await refreshBalances();
-    } else {
-      notifyListeners();
+    await _loadPinGraceForActiveWallet();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_pinEnabled && _credentials != null && _isWithinPinGrace(now)) {
+      _sessionUnlocked = true;
+    }
+    notifyListeners();
+    if (_credentials != null && (!_pinEnabled || _sessionUnlocked)) {
+      unawaited(refreshBalances());
     }
   }
 
@@ -566,6 +648,12 @@ class WalletController extends ChangeNotifier {
     final r = await _storage.verifyPin(pin);
     if (r.ok) {
       _sessionUnlocked = true;
+      final wid = _activeWalletId;
+      if (wid != null) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        _lastSessionUnlockAtMs = now;
+        unawaited(_storage.writePinSessionUnlockAtMs(wid, now));
+      }
       notifyListeners();
       if (_credentials != null) {
         unawaited(refreshBalances());
@@ -611,12 +699,12 @@ class WalletController extends ChangeNotifier {
           quotes = cachedQ;
         }
       }
-      final backendEvm = _activeEvmBackendChains().toList();
-      var anyBalanceRequestOk = backendEvm.isEmpty;
+      final backendChains = _activeBackendChains().toList();
+      var anyBalanceRequestOk = backendChains.isEmpty;
       final coins = <CoinData>[];
-      if (backendEvm.isNotEmpty) {
+      if (backendChains.isNotEmpty) {
         final seen = <String>{};
-        for (final chainCfg in backendEvm) {
+        for (final chainCfg in backendChains) {
           final chainParam = chainCfg.walletApiChainQuery;
           final remote = await _walletBalanceService.fetchBalances(
             address: addressHex,
@@ -625,7 +713,9 @@ class WalletController extends ChangeNotifier {
           if (remote != null) {
             anyBalanceRequestOk = true;
           }
-          final chainIdInt = int.tryParse(chainCfg.chainId);
+          final chainIdInt = chainCfg.chainType.toUpperCase() == 'EVM'
+              ? int.tryParse(chainCfg.chainId)
+              : null;
           if (remote != null && remote.isNotEmpty) {
             for (final row in remote) {
               final sym = row.crypto?.trim() ?? '';
@@ -703,7 +793,7 @@ class WalletController extends ChangeNotifier {
         }
       }
       // 无网时各链常返回 null（非抛错），下面会造出全 0 列表；用 Drift 上次快照，避免全 0 占屏、勿把好缓存写坏
-      if (backendEvm.isNotEmpty && !anyBalanceRequestOk) {
+      if (backendChains.isNotEmpty && !anyBalanceRequestOk) {
         final wid = _activeWalletId;
         if (wid != null) {
           final snap = await _localCache?.getEvmCoinsForWallet(wid);

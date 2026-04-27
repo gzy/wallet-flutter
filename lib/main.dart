@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugPrint, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
@@ -84,6 +86,10 @@ class WalletApp extends StatelessWidget {
         return Consumer<WalletController>(
           builder: (context, w, _) {
             if (child == null) return const SizedBox.shrink();
+            // 切后台时不展示 UnlockScreen（避免 App 切换器里出现 PIN），也不盖黑色遮罩（保持正常页面快照）。
+            if (w.appInBackground) {
+              return child;
+            }
             final needUnlock = w.initReady &&
                 w.hasWallet &&
                 w.pinEnabled &&
@@ -107,8 +113,39 @@ class WalletApp extends StatelessWidget {
   }
 }
 
-class _HomeShell extends StatelessWidget {
+class _HomeShell extends StatefulWidget {
   const _HomeShell();
+
+  @override
+  State<_HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 进入后台/不可见即上锁；回到前台按 30 分钟窗口决定是否免 PIN
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      context.read<WalletController>().onAppBackgrounded();
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      context.read<WalletController>().onAppResumed();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -145,7 +182,7 @@ class MainTabs extends StatefulWidget {
   State<MainTabs> createState() => _MainTabsState();
 }
 
-class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
+class _MainTabsState extends State<MainTabs> {
   int _currentIndex = 0;
 
   static const List<_TabItem> _tabs = [
@@ -159,28 +196,6 @@ class _MainTabsState extends State<MainTabs> with WidgetsBindingObserver {
     _TabItem(
         title: '交易', icon: Icons.compare_arrows_rounded, page: TradeScreen()),
   ];
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 进入后台/不可见即上锁；回到前台由 _HomeShell 决定是否展示 UnlockScreen
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      context.read<WalletController>().lockSession();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

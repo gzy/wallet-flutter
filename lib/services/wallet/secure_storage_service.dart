@@ -15,6 +15,7 @@ class SecureStorageService {
   static const _kPinSalt = 'pin_salt_v1';
   static const _kPinFailCount = 'pin_fail_count_v1';
   static const _kPinLockUntilMs = 'pin_lock_until_ms_v1';
+  static const _kPinSessionUnlockAtPrefix = 'pin_session_unlock_at_ms__';
 
   static const int _kMaxPinFailures = 5;
   static const Duration _kPinLockDuration = Duration(seconds: 30);
@@ -30,6 +31,8 @@ class SecureStorageService {
   String _backedUpKey(String id) => 'wallet_backed_up__$id';
   String _hiddenCoinsKey(String id) => 'wallet_hidden_coins__$id';
   String _recentRecipientsKey(String id) => 'wallet_recent_recipients__$id';
+  String _pinSessionUnlockAtKey(String walletId) =>
+      '$_kPinSessionUnlockAtPrefix$walletId';
 
   /// 用于“卸载重装后首次启动”场景：Keychain 默认不会随卸载清空，
   /// 因此重装后需要主动清理钱包相关条目，避免旧钱包被恢复出来。
@@ -52,6 +55,7 @@ class SecureStorageService {
       if (key.startsWith('wallet_backed_up__')) return true;
       if (key.startsWith('wallet_hidden_coins__')) return true;
       if (key.startsWith('wallet_recent_recipients__')) return true;
+      if (key.startsWith(_kPinSessionUnlockAtPrefix)) return true;
       return false;
     }
 
@@ -223,6 +227,28 @@ class SecureStorageService {
     await _storage.write(key: _kPinHash, value: hash, iOptions: _iosOptions);
     await _storage.write(key: _kPinFailCount, value: '0', iOptions: _iosOptions);
     await _storage.write(key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
+  }
+
+  /// 上次成功解锁会话的时间戳（毫秒），按钱包维度存储。
+  ///
+  /// 用于“30 分钟内免输 PIN”：
+  /// - 切后台即上锁
+  /// - 回前台时若距上次解锁 <= 30 分钟，则自动恢复解锁态
+  Future<int?> readPinSessionUnlockAtMs(String walletId) async {
+    final raw = await _storage.read(
+      key: _pinSessionUnlockAtKey(walletId),
+      iOptions: _iosOptions,
+    );
+    final v = int.tryParse(raw ?? '');
+    return v == null || v <= 0 ? null : v;
+  }
+
+  Future<void> writePinSessionUnlockAtMs(String walletId, int atMs) async {
+    await _storage.write(
+      key: _pinSessionUnlockAtKey(walletId),
+      value: atMs.toString(),
+      iOptions: _iosOptions,
+    );
   }
 
   Future<int> _lockRemainingSeconds() async {

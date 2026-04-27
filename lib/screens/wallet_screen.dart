@@ -86,11 +86,11 @@ class _WalletScreenState extends State<WalletScreen> {
             : '未创建钱包');
     final q = _searchController.text.trim().toLowerCase();
     final coinsOnNetwork = coins.where((c) {
-      // null = 未解析到默认链时展示全部，避免误筛掉所有 EVM 币（它们的 chainId 均有值）
-      if (wallet.sendChainId == null) {
+      final sel = wallet.sendChain;
+      if (sel == null) {
         return true;
       }
-      return c.chainId == wallet.sendChainId;
+      return wallet.chainParamForCoin(c) == sel;
     }).toList();
     final filteredCoins = q.isEmpty
         ? coinsOnNetwork

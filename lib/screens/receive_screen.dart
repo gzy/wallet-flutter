@@ -70,7 +70,19 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       }
       final w = context.read<WalletController>();
       setState(() {
-        _receiveChainId = w.sendChainId;
+        // 收款页目前仅支持 EVM 地址展示；默认取当前网络若为 EVM，否则回退到第一个 EVM 资产。
+        final q = w.sendChain;
+        if (q == null) {
+          _receiveChainId = null;
+        } else {
+          final hit = w.backendChains.firstWhere(
+            (c) => c.walletApiChainQuery == q,
+            orElse: () => w.backendChains.first,
+          );
+          _receiveChainId = hit.chainType.toUpperCase() == 'EVM'
+              ? int.tryParse(hit.chainId)
+              : null;
+        }
       });
     });
   }
