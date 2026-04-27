@@ -9,6 +9,7 @@ import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
 import '../services/wallet/wallet_gas_price_service.dart';
 import '../services/wallet/wallet_estimate_gas_service.dart';
+import '../services/wallet/tron_utils.dart';
 import '../widgets/pin_verify_sheet.dart';
 import 'address_book_screen.dart';
 
@@ -125,9 +126,6 @@ class _TransferScreenState extends State<TransferScreen> {
   List<_TokenItem> _tokensFor(WalletController w) {
     final out = <_TokenItem>[];
     for (final c in w.evmCoins) {
-      if (c.chainId == null) {
-        continue;
-      }
       out.add(
         _TokenItem(
           coin: c,
@@ -420,7 +418,8 @@ class _TransferScreenState extends State<TransferScreen> {
                                 builder: (_) => AddressBookScreen(
                                   symbol: sel.symbol,
                                   networkLabel: sel.network,
-                                  chainQuery: wallet.chainParamForCoin(sel.coin),
+                                  chainQuery:
+                                      wallet.chainParamForCoin(sel.coin),
                                 ),
                               ),
                             );
@@ -772,17 +771,32 @@ class _TransferScreenState extends State<TransferScreen> {
     if (_transferAmountBalanceError(_amount.text, sel) != null) {
       return;
     }
-    final from = wallet.addressHex ?? '';
+    final chainQuery = wallet.chainParamForCoin(sel.coin);
+    final chainCfg = wallet.backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == chainQuery,
+      orElse: () => wallet.backendChains.first,
+    );
+    final isTron = chainCfg.chainType.toUpperCase() == 'TRON';
+    final from = (isTron ? wallet.tronAddress : wallet.addressHex) ?? '';
     final toNorm = _normalizeAddrField(_address.text);
-    if (!RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(toNorm)) {
+    final isToValid = isTron
+        ? isValidTronAddress(toNorm)
+        : RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(toNorm);
+    if (!isToValid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址')),
+        SnackBar(
+          content: Text(
+            isTron
+                ? '收款地址格式无效，请使用 Tron 的 T... 地址'
+                : '收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址',
+          ),
+        ),
       );
       return;
     }
-    final fromNorm =
-        from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from';
+    final fromNorm = isTron
+        ? from
+        : (from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from');
     if (toNorm.toLowerCase() == fromNorm.toLowerCase()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('收款地址不能与当前钱包相同，请填写对方地址')),
@@ -809,7 +823,7 @@ class _TransferScreenState extends State<TransferScreen> {
           fromShort: fromShort,
           amountStr: _amount.text.trim(),
           recipientDisplay: _address.text,
-          toHexNormalized: toNorm,
+          toAddressNormalized: toNorm,
         );
       },
     );
@@ -966,7 +980,7 @@ class _TransferConfirmSheet extends StatefulWidget {
     required this.fromShort,
     required this.amountStr,
     required this.recipientDisplay,
-    required this.toHexNormalized,
+    required this.toAddressNormalized,
   });
 
   final BuildContext hostContext;
@@ -976,7 +990,7 @@ class _TransferConfirmSheet extends StatefulWidget {
   final String fromShort;
   final String amountStr;
   final String recipientDisplay;
-  final String toHexNormalized;
+  final String toAddressNormalized;
 
   @override
   State<_TransferConfirmSheet> createState() => _TransferConfirmSheetState();
@@ -1013,6 +1027,23 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       });
     }
 
+    final chainCfg = widget.wallet.backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == _chainCode,
+      orElse: () => widget.wallet.backendChains.first,
+    );
+    final isTron = chainCfg.chainType.toUpperCase() == 'TRON';
+    if (isTron) {
+      // Tron 费用/预估走不同体系：先不在确认页展示 EVM 的 gas 估算（避免误导）。
+      if (!mounted) return;
+      setState(() {
+        _gasQuote = null;
+        _priceLoading = false;
+        _gasLimit = null;
+        _limitLoading = false;
+      });
+      return;
+    }
+
     final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
     final owner = widget.wallet.addressHex;
     final amount = double.tryParse(widget.amountStr);
@@ -1023,8 +1054,10 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       final data = await _estimateGasSvc.estimateGas(
         chain: _chainCode,
         coin: widget.sel.symbol,
-        ownerAddress: owner.startsWith('0x') || owner.startsWith('0X') ? owner : '0x$owner',
-        toAddress: widget.toHexNormalized,
+        ownerAddress: owner.startsWith('0x') || owner.startsWith('0X')
+            ? owner
+            : '0x$owner',
+        toAddress: widget.toAddressNormalized,
         amount: amount,
       );
       fromApi = WalletEstimateGasService.parseGasLimit(data);
@@ -1114,9 +1147,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     String level,
   ) {
     final isActive = _gasLevel == level;
-    final gweiStr = quote == null
-        ? '—'
-        : _gweiForLevel(quote, level);
+    final gweiStr = quote == null ? '—' : _gweiForLevel(quote, level);
     return InkWell(
       onTap: _feeLoading
           ? null
@@ -1336,8 +1367,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                     final owner = widget.wallet.addressHex;
                                     if (owner == null || owner.isEmpty) {
                                       messenger.showSnackBar(
-                                        const SnackBar(
-                                            content: Text('钱包地址为空')),
+                                        const SnackBar(content: Text('钱包地址为空')),
                                       );
                                       return;
                                     }
@@ -1374,7 +1404,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                                 SizedBox(
                                                   width: 22,
                                                   height: 22,
-                                                  child: CircularProgressIndicator(
+                                                  child:
+                                                      CircularProgressIndicator(
                                                     strokeWidth: 2,
                                                     color: AppColors.accent,
                                                   ),
@@ -1399,22 +1430,22 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       if (!host.mounted) {
                                         return;
                                       }
-                                      final hash =
-                                          await wc.createSignBroadcastBackendTransfer(
+                                      final hash = await wc
+                                          .createSignBroadcastBackendTransfer(
                                         chain: _chainCode,
                                         coin: widget.sel.symbol,
-                                        toAddress: widget.toHexNormalized,
+                                        toAddress: widget.toAddressNormalized,
                                         amount: double.parse(amountStr),
                                         gasPriceType: gasPriceType,
                                       );
                                       closeLoading();
-                                      unawaited(wc.recordRecentTransferRecipient(
+                                      unawaited(
+                                          wc.recordRecentTransferRecipient(
                                         chain: _chainCode,
-                                        address: widget.toHexNormalized,
+                                        address: widget.toAddressNormalized,
                                       ));
                                       messenger.showSnackBar(
-                                        SnackBar(
-                                            content: Text('已广播: $hash')),
+                                        SnackBar(content: Text('已广播: $hash')),
                                       );
                                       await wc.refreshBalances();
                                       if (!host.mounted) {

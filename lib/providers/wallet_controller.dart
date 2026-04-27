@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web3dart/web3dart.dart';
-import 'package:web3dart/crypto.dart' show bytesToHex, hexToBytes, hexToInt;
+import 'package:web3dart/crypto.dart'
+    show bytesToHex, hexToBytes, hexToInt, sign;
+import 'package:crypto/crypto.dart' show sha256;
 
 import '../data/local/app_local_cache.dart';
 import '../models/app_chain_config.dart';
@@ -17,6 +20,7 @@ import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
 import '../services/wallet/wallet_transfer_api_service.dart';
+import '../services/wallet/tron_utils.dart';
 
 /// 全局钱包状态：多钱包、PIN、助记词派生、EVM 余额、发送交易
 class WalletController extends ChangeNotifier {
@@ -50,6 +54,8 @@ class WalletController extends ChangeNotifier {
   String? _activeWalletId;
   EthPrivateKey? _credentials;
   String? _addressHex;
+  Uint8List? _tronPrivateKey;
+  String? _tronAddress;
   bool _backedUp = false;
   bool _loading = false;
   /// 首页网络筛选：后端钱包接口使用的 `chain` 查询参数（优先 chainCode，缺失则 chainId 字符串）。
@@ -72,6 +78,7 @@ class WalletController extends ChangeNotifier {
 
   bool get hasWallet => _credentials != null;
   String? get addressHex => _addressHex;
+  String? get tronAddress => _tronAddress;
   EthereumAddress? get address =>
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
@@ -382,6 +389,8 @@ class WalletController extends ChangeNotifier {
   Future<void> _loadCredentialsFromActiveMnemonic() async {
     _credentials = null;
     _addressHex = null;
+    _tronPrivateKey = null;
+    _tronAddress = null;
     _backedUp = false;
     final id = _activeWalletId;
     if (id == null) {
@@ -394,6 +403,11 @@ class WalletController extends ChangeNotifier {
     try {
       _credentials = HdWalletService.privateKeyFromMnemonic(m);
       _addressHex = _credentials!.address.hex;
+      final tronPk = Uint8List.fromList(
+        HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
+      );
+      _tronPrivateKey = tronPk;
+      _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
       final idx = _wallets.indexWhere((w) => w.id == id);
       _backedUp = idx >= 0
           ? _wallets[idx].backedUp
@@ -402,6 +416,8 @@ class WalletController extends ChangeNotifier {
       debugPrint('Wallet init failed: $e\n$st');
       _credentials = null;
       _addressHex = null;
+      _tronPrivateKey = null;
+      _tronAddress = null;
     }
   }
 
@@ -692,6 +708,7 @@ class WalletController extends ChangeNotifier {
     try {
       final addr = _credentials!.address;
       final addressHex = addr.hex;
+      final tronAddr = _tronAddress;
       var quotes = await _appPriceService.fetchAllPrices();
       if (quotes.isEmpty) {
         final cachedQ = await _localCache?.getPriceQuotes();
@@ -706,8 +723,21 @@ class WalletController extends ChangeNotifier {
         final seen = <String>{};
         for (final chainCfg in backendChains) {
           final chainParam = chainCfg.walletApiChainQuery;
+          final chainType = chainCfg.chainType.trim().toUpperCase();
+          final ownerAddress = switch (chainType) {
+            'TRON' => tronAddr ?? '',
+            _ => addressHex,
+          };
+          if (ownerAddress.isEmpty) {
+            continue;
+          }
+          if (kDebugMode) {
+            debugPrint(
+              'refreshBalances: chain=$chainParam type=$chainType address=$ownerAddress',
+            );
+          }
           final remote = await _walletBalanceService.fetchBalances(
-            address: addressHex,
+            address: ownerAddress,
             chain: chainParam,
           );
           if (remote != null) {
@@ -943,6 +973,91 @@ class WalletController extends ChangeNotifier {
     if (key == null) {
       throw StateError('No wallet');
     }
+    final chainType = backendChains
+        .firstWhere(
+          (c) => c.walletApiChainQuery == chain,
+          orElse: () => const AppChainConfig(
+            chainId: '',
+            chainType: 'EVM',
+            chainName: '',
+            symbol: '',
+          ),
+        )
+        .chainType
+        .toUpperCase();
+
+    if (chainType == 'TRON') {
+      final pk = _tronPrivateKey;
+      final owner = _tronAddress;
+      if (pk == null || owner == null || owner.isEmpty) {
+        throw StateError('Tron 钱包未初始化');
+      }
+      final create = await _transferApi.createTransaction(
+        chain: chain,
+        coin: coin,
+        ownerAddress: owner,
+        toAddress: toAddress,
+        amount: amount,
+      );
+      if (create == null) {
+        throw StateError('createTransaction 无响应');
+      }
+      if (create['code'] != 0) {
+        final msg = create['message']?.toString() ?? 'createTransaction 失败';
+        throw StateError(msg);
+      }
+      // 先尽可能兼容不同字段命名；并打印样例便于与你后端对齐
+      if (kDebugMode) {
+        debugPrint('TRON createTransaction resp: $create');
+      }
+      final data = _asMap(create['data']);
+      final rawHex = (data['rawDataHex'] ??
+              data['raw_data_hex'] ??
+              (data['transaction'] is Map
+                  ? (data['transaction'] as Map)['raw_data_hex']
+                  : null))
+          ?.toString();
+      if (rawHex == null || rawHex.trim().isEmpty) {
+        throw StateError('TRON createTransaction 缺少 rawDataHex/raw_data_hex');
+      }
+      final rawBytes = tronHexToBytes(rawHex);
+      final digest = sha256.convert(rawBytes).bytes;
+      final sig = sign(Uint8List.fromList(digest), pk);
+      final sigBytes = Uint8List(65);
+      final rBytes = _uint256To32(sig.r);
+      final sBytes = _uint256To32(sig.s);
+      sigBytes.setRange(0, 32, rBytes);
+      sigBytes.setRange(32, 64, sBytes);
+      sigBytes[64] = sig.v;
+      final sigHex = bytesToHex(sigBytes, include0x: false);
+
+      Map<String, dynamic> txMap;
+      final tx = data['transaction'];
+      if (tx is Map) {
+        txMap = Map<String, dynamic>.from(tx);
+      } else {
+        txMap = Map<String, dynamic>.from(data);
+      }
+      txMap['signature'] = [sigHex];
+      final broad = await _transferApi.broadcastTransaction(
+        chain: chain,
+        coin: coin,
+        data: jsonEncode(txMap),
+      );
+      if (kDebugMode) {
+        debugPrint('TRON broadcastTransaction resp: $broad');
+      }
+      if (broad == null) {
+        throw StateError('broadcastTransaction 无响应');
+      }
+      if (broad['code'] != 0) {
+        final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+        throw StateError(msg);
+      }
+      final h = _readTxHashFromBroadcast(broad['data']);
+      return h ?? (data['txId']?.toString() ?? sigHex);
+    }
+
     final create = await _transferApi.createTransaction(
       chain: chain,
       coin: coin,
@@ -993,5 +1108,15 @@ class WalletController extends ChangeNotifier {
     }
     final h = _readTxHashFromBroadcast(broad['data']);
     return h ?? signed;
+  }
+
+  static Uint8List _uint256To32(BigInt v) {
+    final out = Uint8List(32);
+    var x = v;
+    for (var i = 31; i >= 0; i--) {
+      out[i] = (x & BigInt.from(0xff)).toInt();
+      x = x >> 8;
+    }
+    return out;
   }
 }

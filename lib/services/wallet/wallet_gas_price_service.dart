@@ -39,7 +39,8 @@ class WalletGasPriceService {
   final http.Client _httpClient;
 
   static http.Client _defaultClient() {
-    return HttpClients.create(logName: 'WalletGasPrice', maxLogBodyLength: 12000);
+    return HttpClients.create(
+        logName: 'WalletGasPrice', maxLogBodyLength: 12000);
   }
 
   static Uri _buildUri({required String chain}) {
@@ -51,12 +52,10 @@ class WalletGasPriceService {
   /// 成功且 `code == 0` 时返回报价；HTTP/解析/`code != 0` 时返回 `null`。
   Future<WalletGasPriceQuote?> fetchGasPrice({required String chain}) async {
     try {
-      final res = await _httpClient
-          .get(
-            _buildUri(chain: chain),
-            headers: const {'Accept': '*/*'},
-          )
-          .timeout(const Duration(seconds: 12));
+      final res = await _httpClient.get(
+        _buildUri(chain: chain),
+        headers: const {'Accept': '*/*'},
+      ).timeout(const Duration(seconds: 12));
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
         if (kDebugMode) {
@@ -103,4 +102,3 @@ class WalletGasPriceService {
     }
   }
 }
-
