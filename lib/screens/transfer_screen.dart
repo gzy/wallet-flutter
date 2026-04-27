@@ -862,6 +862,7 @@ class _TransferScreenState extends State<TransferScreen> {
     TextInputAction? textInputAction,
     List<TextInputFormatter>? inputFormatters,
   }) {
+    final isAddressField = controller == _address;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -873,8 +874,13 @@ class _TransferScreenState extends State<TransferScreen> {
           Expanded(
             child: TextField(
               controller: controller,
-              keyboardType: keyboardType,
-              textInputAction: textInputAction,
+              keyboardType: isAddressField
+                  ? TextInputType.multiline
+                  : keyboardType,
+              textInputAction:
+                  isAddressField ? TextInputAction.newline : textInputAction,
+              minLines: isAddressField ? 1 : null,
+              maxLines: isAddressField ? 3 : 1,
               inputFormatters: inputFormatters,
               style:
                   const TextStyle(color: AppColors.textPrimary, fontSize: 16),
