@@ -9,7 +9,10 @@ import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
 
 class ReceiveScreen extends StatefulWidget {
-  const ReceiveScreen({super.key});
+  const ReceiveScreen({super.key, this.initialChain});
+
+  /// 进入时默认选中的后端 `chain` 查询参数（如 ETH/BSC/TRX）；为空则使用当前全局筛选 [WalletController.sendChain]。
+  final String? initialChain;
 
   @override
   State<ReceiveScreen> createState() => _ReceiveScreenState();
@@ -24,7 +27,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     Color(0xFFA78BFA),
   ];
 
-  int? _receiveChainId;
+  String? _receiveChain;
   bool _copied = false;
   final GlobalKey _shareButtonKey = GlobalKey();
 
@@ -70,19 +73,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       }
       final w = context.read<WalletController>();
       setState(() {
-        // 收款页目前仅支持 EVM 地址展示；默认取当前网络若为 EVM，否则回退到第一个 EVM 资产。
-        final q = w.sendChain;
-        if (q == null) {
-          _receiveChainId = null;
-        } else {
-          final hit = w.backendChains.firstWhere(
-            (c) => c.walletApiChainQuery == q,
-            orElse: () => w.backendChains.first,
-          );
-          _receiveChainId = hit.chainType.toUpperCase() == 'EVM'
-              ? int.tryParse(hit.chainId)
-              : null;
-        }
+        _receiveChain = widget.initialChain ?? w.sendChain;
       });
     });
   }
@@ -103,12 +94,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   List<_TokenOption> _tokenOptionsFor(WalletController w) {
     final out = <_TokenOption>[];
     for (final c in w.evmCoins) {
-      if (c.chainId == null) {
-        continue;
-      }
       out.add(
         _TokenOption(
-          chainId: c.chainId!,
+          chain: w.chainParamForCoin(c),
           symbol: c.symbol,
           network: c.network ?? '—',
           titleLine: _titleLineForCoin(c),
@@ -125,12 +113,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     if (opts.isEmpty) {
       throw StateError('no token options');
     }
-    final want = _receiveChainId;
+    final want = _receiveChain;
     if (want == null) {
       return opts.first;
     }
     return opts.firstWhere(
-      (o) => o.chainId == want,
+      (o) => o.chain == want,
       orElse: () => opts.first,
     );
   }
@@ -138,8 +126,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   Widget build(BuildContext context) {
     final wallet = context.watch<WalletController>();
-    final address = wallet.addressHex;
-    if (address == null) {
+    final evmAddress = wallet.addressHex;
+    final tronAddress = wallet.tronAddress;
+    if (evmAddress == null) {
       return Scaffold(
         backgroundColor: AppColors.background,
         appBar: AppBar(
@@ -181,9 +170,35 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
 
     final token = _currentToken(wallet);
+    final cfg = wallet.backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == token.chain,
+      orElse: () => wallet.backendChains.first,
+    );
+    final isTron = cfg.chainType.trim().toUpperCase() == 'TRON';
+    final address = isTron ? tronAddress : evmAddress;
+    if (address == null || address.isEmpty) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          backgroundColor: AppColors.background,
+          elevation: 0,
+          title: const Text('收款', style: TextStyle(fontSize: 18)),
+        ),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              '收款地址不可用',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+        ),
+      );
+    }
     final walletTitle = (wallet.activeWallet?.name ?? '').trim();
-    final addrShort =
-        '${address.substring(0, 6)}…${address.substring(address.length - 4)}';
+    final addrShort = address.length > 12
+        ? '${address.substring(0, 6)}…${address.substring(address.length - 4)}'
+        : address;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -538,7 +553,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   Future<void> _openTokenPicker(WalletController wallet) async {
     String searchQuery = '';
-    final picked = await showModalBottomSheet<int>(
+    final picked = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -642,7 +657,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                           return ListTile(
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 4),
-                            onTap: () => Navigator.pop(context, t.chainId),
+                            onTap: () => Navigator.pop(context, t.chain),
                             leading: CircleAvatar(
                               radius: 20,
                               backgroundColor: t.color,
@@ -692,13 +707,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       },
     );
     if (picked != null) {
-      setState(() => _receiveChainId = picked);
+      setState(() => _receiveChain = picked);
     }
   }
 }
 
 class _TokenOption {
-  final int chainId;
+  final String chain;
   final String symbol;
   final String network;
   /// 主卡片展示，如 `ETH (Ethereum Sepolia)`。
@@ -706,7 +721,7 @@ class _TokenOption {
   final double balance;
   final Color color;
   const _TokenOption({
-    required this.chainId,
+    required this.chain,
     required this.symbol,
     required this.network,
     required this.titleLine,

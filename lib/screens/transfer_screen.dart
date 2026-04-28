@@ -66,10 +66,12 @@ class _TokenItem {
 }
 
 class TransferScreen extends StatefulWidget {
-  const TransferScreen({super.key, this.initialRecipientAddress});
+  const TransferScreen({super.key, this.initialRecipientAddress, this.initialChain});
 
   /// 从交易详情「转账给他/她」进入时预填收款地址（含 `0x`）。
   final String? initialRecipientAddress;
+  /// 进入时默认选中的后端 `chain` 查询参数（如 ETH/BSC/TRX）；为空则使用当前全局筛选 [WalletController.sendChain]。
+  final String? initialChain;
 
   @override
   State<TransferScreen> createState() => _TransferScreenState();
@@ -257,9 +259,18 @@ class _TransferScreenState extends State<TransferScreen> {
   Widget build(BuildContext context) {
     final wallet = context.watch<WalletController>();
     final tokens = _tokensFor(wallet);
+    final initialChain = widget.initialChain ?? wallet.sendChain;
     if (tokens.isNotEmpty && !_syncedInitialChain) {
       _syncedInitialChain = true;
-      final idx = _indexForSendChain(wallet, tokens);
+      var idx = _indexForSendChain(wallet, tokens);
+      if (initialChain != null) {
+        for (var i = 0; i < tokens.length; i++) {
+          if (wallet.chainParamForCoin(tokens[i].coin) == initialChain) {
+            idx = i;
+            break;
+          }
+        }
+      }
       if (idx != _selectedTokenIndex) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) {
@@ -1014,6 +1025,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
 
   WalletGasPriceService get _gasSvc => WalletGasPriceService();
   WalletEstimateGasService get _estimateGasSvc => WalletEstimateGasService();
+  bool? _isTron;
 
   String get _chainCode {
     // 与 `/api/app/wallet/gasPrice`、`estimateGas`、`createTransaction` 的 `chain` 参数一致（优先后端 chainCode）。
@@ -1037,21 +1049,22 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       (c) => c.walletApiChainQuery == _chainCode,
       orElse: () => widget.wallet.backendChains.first,
     );
-    final isTron = chainCfg.chainType.toUpperCase() == 'TRON';
+    final isTron = chainCfg.chainType.trim().toUpperCase() == 'TRON';
+    _isTron ??= isTron;
     if (isTron) {
-      // Tron 费用/预估走不同体系：先不在确认页展示 EVM 的 gas 估算（避免误导）。
+      // TRON 不展示矿工费（能量/带宽模型），且不应阻塞“转出”按钮。
       if (!mounted) return;
       setState(() {
         _gasQuote = null;
-        _priceLoading = false;
         _gasLimit = null;
+        _priceLoading = false;
         _limitLoading = false;
       });
       return;
     }
-
     final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
-    final owner = widget.wallet.addressHex;
+    final owner =
+        isTron ? widget.wallet.tronAddress : widget.wallet.addressHex;
     final amount = double.tryParse(widget.amountStr);
     int? fromApi;
     if (owner == null || owner.isEmpty || amount == null) {
@@ -1060,9 +1073,11 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       final data = await _estimateGasSvc.estimateGas(
         chain: _chainCode,
         coin: widget.sel.symbol,
-        ownerAddress: owner.startsWith('0x') || owner.startsWith('0X')
+        ownerAddress: isTron
             ? owner
-            : '0x$owner',
+            : (owner.startsWith('0x') || owner.startsWith('0X')
+                ? owner
+                : '0x$owner'),
         toAddress: widget.toAddressNormalized,
         amount: amount,
       );
@@ -1100,6 +1115,9 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     if (_feeLoading) {
       return '正在获取矿工费…';
     }
+    if (_isTron == true) {
+      return '—';
+    }
     if (quote == null) {
       return '获取失败，稍后重试';
     }
@@ -1125,6 +1143,9 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   }
 
   String _usdForLevel(WalletGasPriceQuote? quote, String level) {
+    if (_isTron == true) {
+      return '—';
+    }
     if (quote == null || widget.sel.priceUsd <= 0) {
       return '—';
     }
@@ -1154,6 +1175,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   ) {
     final isActive = _gasLevel == level;
     final gweiStr = quote == null ? '—' : _gweiForLevel(quote, level);
+    final unit = _isTron == true ? '' : ' Gwei';
     return InkWell(
       onTap: _feeLoading
           ? null
@@ -1193,7 +1215,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             ),
             const SizedBox(height: 2),
             Text(
-              gweiStr == '—' ? '—' : '$gweiStr Gwei',
+              gweiStr == '—' ? '—' : '$gweiStr$unit',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -1270,28 +1292,32 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             const SizedBox(height: 8),
             _transferConfirmCard(
               children: [
-                _transferKvRow('矿工费', _gasFeeTitle(quote)),
-                const SizedBox(height: 10),
+                if (_isTron != true) ...[
+                  _transferKvRow('矿工费', _gasFeeTitle(quote)),
+                  const SizedBox(height: 10),
+                ],
                 _transferKvRow(
                   '支付方式',
                   '${widget.sel.symbol}（${widget.sel.network}）',
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: _gasCell(quote, '低')),
-                    const SizedBox(width: 8),
-                    Expanded(child: _gasCell(quote, '中')),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(child: _gasCell(quote, '高')),
-                    const SizedBox(width: 8),
-                    const Expanded(child: SizedBox()),
-                  ],
-                ),
+                if (_isTron != true) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(child: _gasCell(quote, '低')),
+                      const SizedBox(width: 8),
+                      Expanded(child: _gasCell(quote, '中')),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(child: _gasCell(quote, '高')),
+                      const SizedBox(width: 8),
+                      const Expanded(child: SizedBox()),
+                    ],
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 14),
@@ -1370,18 +1396,22 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       );
                                       return;
                                     }
-                                    final owner = widget.wallet.addressHex;
+                                    final owner = _isTron == true
+                                        ? widget.wallet.tronAddress
+                                        : widget.wallet.addressHex;
                                     if (owner == null || owner.isEmpty) {
                                       messenger.showSnackBar(
                                         const SnackBar(content: Text('钱包地址为空')),
                                       );
                                       return;
                                     }
-                                    final gasPriceType = switch (_gasLevel) {
-                                      '低' => 'slow',
-                                      '高' => 'fast',
-                                      _ => 'medium',
-                                    };
+                                    final gasPriceType = _isTron == true
+                                        ? null
+                                        : switch (_gasLevel) {
+                                            '低' => 'slow',
+                                            '高' => 'fast',
+                                            _ => 'medium',
+                                          };
                                     if (!host.mounted) {
                                       return;
                                     }

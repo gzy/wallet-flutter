@@ -226,18 +226,9 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
 
   Future<void> _loadTxs() async {
     final wc = context.read<WalletController>();
-    final addr = wc.addressHex;
     final live = _liveCoin(wc, widget.coin);
     final gen = ++_txRequestGen;
     if (!mounted) {
-      return;
-    }
-    if (addr == null || live.chainId == null) {
-      setState(() {
-        _txsFromApi = null;
-        _txLoading = false;
-        _txError = null;
-      });
       return;
     }
     setState(() {
@@ -251,7 +242,21 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (chain.isEmpty) {
         throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
       }
-      final address = addr.startsWith('0x') ? addr : '0x$addr';
+      final chainType = wc.backendChains
+          .firstWhere(
+            (c) => c.walletApiChainQuery == chain,
+            orElse: () => wc.backendChains.first,
+          )
+          .chainType
+          .trim()
+          .toUpperCase();
+      final addr = wc.addressHex ?? '';
+      final address = chainType == 'TRON'
+          ? (wc.tronAddress ?? '')
+          : (addr.startsWith('0x') ? addr : '0x$addr');
+      if (address.isEmpty) {
+        throw StateError('缺少地址，无法拉取交易记录');
+      }
       final cache = wc.localCache;
       final scope = cache?.transactionScopeKey(address, chain, live.symbol);
       if (cache != null && scope != null) {
@@ -318,7 +323,18 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (cache != null) {
         try {
           final chain2 = wc.chainParamForCoin(live);
-          final ad = addr.startsWith('0x') ? addr : '0x$addr';
+          final chainType2 = wc.backendChains
+              .firstWhere(
+                (c) => c.walletApiChainQuery == chain2,
+                orElse: () => wc.backendChains.first,
+              )
+              .chainType
+              .trim()
+              .toUpperCase();
+          final hex = wc.addressHex ?? '';
+          final ad = chainType2 == 'TRON'
+              ? (wc.tronAddress ?? '')
+              : (hex.startsWith('0x') ? hex : '0x$hex');
           final sc = cache.transactionScopeKey(ad, chain2, live.symbol);
           final fromDisk = await cache.getTransactionHistory(sc);
           if (fromDisk != null) {
@@ -468,7 +484,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   Widget build(BuildContext context) {
     final wc = context.watch<WalletController>();
     final live = _liveCoin(wc, widget.coin);
-    final hasChain = live.chainId != null;
+    final hasChain = wc.chainParamForCoin(live).trim().isNotEmpty;
     final subtitle = _walletAddressSubtitle(wc);
     final walletHex = wc.addressHex;
     final useApiList = _txsFromApi != null;
@@ -865,7 +881,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         !_txLoading &&
                         _txError == null &&
                         _txCompositeEmpty() &&
-                        wc.addressHex != null)
+                        (wc.addressHex != null || wc.tronAddress != null))
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -1080,9 +1096,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                     height: 56,
                     child: OutlinedButton(
                       onPressed: () {
+                        final wc = context.read<WalletController>();
+                        final chain = wc.chainParamForCoin(widget.coin);
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                              builder: (_) => const ReceiveScreen()),
+                              builder: (_) => ReceiveScreen(initialChain: chain)),
                         );
                       },
                       style: OutlinedButton.styleFrom(
@@ -1121,9 +1139,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(16),
                           onTap: () {
+                            final wc = context.read<WalletController>();
+                            final chain = wc.chainParamForCoin(widget.coin);
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                  builder: (_) => const TransferScreen()),
+                                  builder: (_) => TransferScreen(initialChain: chain)),
                             );
                           },
                           child: const Center(

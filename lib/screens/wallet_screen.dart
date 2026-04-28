@@ -162,7 +162,9 @@ class _WalletScreenState extends State<WalletScreen> {
                                   onReceive: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
-                                          builder: (_) => const ReceiveScreen()),
+                                          builder: (_) => ReceiveScreen(
+                                                initialChain: wallet.sendChain,
+                                              )),
                                     );
                                   },
                                   onBuy: () {

@@ -1028,7 +1028,9 @@ class WalletController extends ChangeNotifier {
       final sBytes = _uint256To32(sig.s);
       sigBytes.setRange(0, 32, rBytes);
       sigBytes.setRange(32, 64, sBytes);
-      sigBytes[64] = sig.v;
+      // web3dart 的 v 为 27/28（以太坊传统），Tron 期望 recoveryId 为 0/1。
+      final recId = sig.v >= 27 ? (sig.v - 27) : sig.v;
+      sigBytes[64] = recId;
       final sigHex = bytesToHex(sigBytes, include0x: false);
 
       Map<String, dynamic> txMap;

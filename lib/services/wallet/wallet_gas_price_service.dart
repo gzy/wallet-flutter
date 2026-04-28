@@ -31,6 +31,14 @@ Decimal? _asDecimal(Object? v) {
   }
 }
 
+Decimal? _pickDecimal(Map<String, dynamic> m, List<String> keys) {
+  for (final k in keys) {
+    final v = _asDecimal(m[k]);
+    if (v != null) return v;
+  }
+  return null;
+}
+
 /// 后端矿工费报价（OpenAPI：`GET /api/app/wallet/gasPrice?chain=`）。
 class WalletGasPriceService {
   WalletGasPriceService({http.Client? httpClient})
@@ -82,10 +90,30 @@ class WalletGasPriceService {
         return null;
       }
       final m = Map<String, dynamic>.from(data);
-      final slow = _asDecimal(m['slowGasPrice']);
-      final med = _asDecimal(m['mediumGasPrice']);
-      final fast = _asDecimal(m['fastGasPrice']);
-      final base = _asDecimal(m['suggestBaseFee']);
+      final slow = _pickDecimal(m, const [
+        'slowGasPrice',
+        'slow_gas_price',
+        'slow',
+        'low',
+      ]);
+      final med = _pickDecimal(m, const [
+        'mediumGasPrice',
+        'medium_gas_price',
+        'medium',
+        'normal',
+      ]);
+      final fast = _pickDecimal(m, const [
+        'fastGasPrice',
+        'fast_gas_price',
+        'fast',
+        'high',
+      ]);
+      final base = _pickDecimal(m, const [
+        'suggestBaseFee',
+        'suggest_base_fee',
+        'baseFee',
+        'base_fee',
+      ]);
       if (slow == null || med == null || fast == null || base == null) {
         return null;
       }

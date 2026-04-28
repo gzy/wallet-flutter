@@ -94,7 +94,8 @@ bool isValidTronAddress(String raw) {
 /// 从私钥 bytes 派生 Tron 地址（Base58Check，T...）。
 String tronAddressFromPrivateKeyBytes(Uint8List privateKey32) {
   final pub = privateKeyBytesToPublic(privateKey32);
-  final hash = keccak256(pub.sublist(1)); // drop 0x04
+  // web3dart 的 privateKeyBytesToPublic 已经返回 64 字节（去掉了 0x04 前缀），这里不能再 sublist(1)。
+  final hash = keccak256(pub);
   final addr20 = hash.sublist(12);
   final payload = Uint8List(21);
   payload[0] = 0x41;

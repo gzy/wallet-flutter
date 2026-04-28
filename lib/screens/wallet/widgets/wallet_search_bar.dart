@@ -127,13 +127,10 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                                   const CircleAvatar(
                                     radius: 21,
                                     backgroundColor: Color(0xFF3A3D45),
-                                    child: Text(
-                                      '全',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 18,
-                                      ),
+                                    child: Icon(
+                                      Icons.grid_view_rounded,
+                                      color: Colors.white,
+                                      size: 20,
                                     ),
                                   ),
                                   const SizedBox(width: 12),
