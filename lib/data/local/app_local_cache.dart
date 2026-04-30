@@ -6,6 +6,7 @@ import '../../models/app_chain_config.dart';
 import '../../models/chain_transaction_vo.dart';
 import '../../models/coin_data.dart';
 import '../../services/market/app_price_service.dart';
+import '../../services/wallet/chain_rules.dart';
 import 'app_database.dart';
 
 const _kChainList = 'cache_chains_v1';
@@ -21,6 +22,11 @@ String normalizeHexAddr(String a) {
     s = '0x$s';
   }
   return s.toLowerCase();
+}
+
+String normalizeScopeAddress(String address, String chainQuery) {
+  final kind = ChainRules.kindFromChainQuery(chainQuery);
+  return ChainRules.normalizeAddressForStorage(kind, address);
 }
 
 /// 非敏感只读数据：链配置、资产快照、行情、交易历史列表。
@@ -108,8 +114,12 @@ class AppLocalCache {
         final p = m['price'];
         final c = m['c'];
         out[k] = AppSymbolQuote(
-          price: (p is num) ? p.toDouble() : (double.tryParse(p?.toString() ?? '0') ?? 0),
-          change24h: (c is num) ? c.toDouble() : (double.tryParse(c?.toString() ?? '0') ?? 0),
+          price: (p is num)
+              ? p.toDouble()
+              : (double.tryParse(p?.toString() ?? '0') ?? 0),
+          change24h: (c is num)
+              ? c.toDouble()
+              : (double.tryParse(c?.toString() ?? '0') ?? 0),
         );
       });
       return out;
@@ -120,7 +130,8 @@ class AppLocalCache {
 
   // --- 首页多链资产行（[CoinData] 快照，按当前钱包 id） ---
 
-  Future<void> putEvmCoinsForWallet(String walletId, List<CoinData> coins) async {
+  Future<void> putEvmCoinsForWallet(
+      String walletId, List<CoinData> coins) async {
     if (walletId.isEmpty) {
       return;
     }
@@ -141,7 +152,8 @@ class AppLocalCache {
       return null;
     }
     final key = _kEvmCoinsForWallet(walletId);
-    final r = await (_db.select(_db.cacheEntries)..where((e) => e.key.equals(key)))
+    final r = await (_db.select(_db.cacheEntries)
+          ..where((e) => e.key.equals(key)))
         .getSingleOrNull();
     if (r == null) {
       return null;
@@ -173,7 +185,7 @@ class AppLocalCache {
     String chain,
     String coinSymbol,
   ) {
-    return '${normalizeHexAddr(address)}|${chain.trim().toUpperCase()}|${coinSymbol.toUpperCase()}';
+    return '${normalizeScopeAddress(address, chain)}|${chain.trim().toUpperCase()}|${coinSymbol.toUpperCase()}';
   }
 
   String _txMetaKey(String scope) => 'tx_meta__$scope';

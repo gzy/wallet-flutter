@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import 'dart:async' show unawaited;
+
 import '../services/wallet/secure_storage_service.dart';
 import '../theme/app_colors.dart';
+import 'pin_keypad.dart';
 
 /// 底部弹出的 6 位 PIN 校验（与转账授权等共用交互）。
 class PinVerifySheet extends StatefulWidget {
@@ -27,7 +30,8 @@ class PinVerifySheet extends StatefulWidget {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withValues(alpha: 0.6),
-      builder: (_) => PinVerifySheet(title: title, subtitle: subtitle, verify: verify),
+      builder: (_) =>
+          PinVerifySheet(title: title, subtitle: subtitle, verify: verify),
     );
   }
 
@@ -36,18 +40,24 @@ class PinVerifySheet extends StatefulWidget {
 }
 
 class _PinVerifySheetState extends State<PinVerifySheet> {
-  String _pin = '';
+  // 注意：历史版本这里用过 String `_pin`。为避免热重载残留导致类型不一致崩溃，这里改名为 `_pinVN`。
+  final ValueNotifier<String> _pinVN = ValueNotifier<String>('');
   bool _busy = false;
 
-  Future<void> _tap(String n) async {
-    if (_pin.length >= 6 || _busy) return;
-    setState(() => _pin = '$_pin$n');
-    if (_pin.length != 6) return;
+  void _onDigit(String n) {
+    if (_busy || _pinVN.value.length >= 6) return;
+    _pinVN.value = _pinVN.value + n;
+    if (_pinVN.value.length == 6) {
+      unawaited(_submitIfComplete());
+    }
+  }
 
+  Future<void> _submitIfComplete() async {
+    if (_busy || _pinVN.value.length != 6) return;
     setState(() => _busy = true);
     await Future<void>.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
-    final r = await widget.verify(_pin);
+    final r = await widget.verify(_pinVN.value);
     if (!mounted) return;
     if (!r.ok) {
       final msg = r.lockedSeconds != null && r.lockedSeconds! > 0
@@ -56,18 +66,22 @@ class _PinVerifySheetState extends State<PinVerifySheet> {
               ? 'PIN 不正确，还可尝试 ${r.remainingAttempts} 次'
               : 'PIN 不正确');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      setState(() {
-        _pin = '';
-        _busy = false;
-      });
+      _pinVN.value = '';
+      setState(() => _busy = false);
       return;
     }
     Navigator.of(context).pop(true);
   }
 
   void _delete() {
-    if (_pin.isEmpty) return;
-    setState(() => _pin = _pin.substring(0, _pin.length - 1));
+    if (_pinVN.value.isEmpty || _busy) return;
+    _pinVN.value = _pinVN.value.substring(0, _pinVN.value.length - 1);
+  }
+
+  @override
+  void dispose() {
+    _pinVN.dispose();
+    super.dispose();
   }
 
   @override
@@ -98,7 +112,8 @@ class _PinVerifySheetState extends State<PinVerifySheet> {
                   const Spacer(),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                   ),
                 ],
               ),
@@ -106,117 +121,26 @@ class _PinVerifySheetState extends State<PinVerifySheet> {
               Text(
                 widget.subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.35),
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 13, height: 1.35),
               ),
-              const SizedBox(height: 18),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(6, (i) {
-                  final filled = i < _pin.length;
-                  return Container(
-                    width: 44,
-                    height: 44,
-                    margin: const EdgeInsets.symmetric(horizontal: 7),
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: filled ? AppColors.textPrimary : AppColors.borderSoft,
-                        width: 2,
-                      ),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: filled
-                        ? Center(
-                            child: Container(
-                              width: 10,
-                              height: 10,
-                              decoration: const BoxDecoration(
-                                color: AppColors.textPrimary,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          )
-                        : null,
-                  );
-                }),
+              const SizedBox(height: 16),
+              ValueListenableBuilder<String>(
+                valueListenable: _pinVN,
+                builder: (_, pin, __) =>
+                    PinDotsRow(length: pin.length, size: 44, gap: 12),
               ),
-              const SizedBox(height: 18),
-              _KeyRow(keys: const ['1', '2', '3'], onTap: _tap),
-              const SizedBox(height: 10),
-              _KeyRow(keys: const ['4', '5', '6'], onTap: _tap),
-              const SizedBox(height: 10),
-              _KeyRow(keys: const ['7', '8', '9'], onTap: _tap),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const SizedBox(width: 88, height: 54),
-                  _KeyButton(label: '0', onTap: () => _tap('0')),
-                  const SizedBox(width: 12),
-                  SizedBox(
-                    width: 88,
-                    height: 54,
-                    child: TextButton(
-                      onPressed: _delete,
-                      child: const Icon(Icons.backspace_outlined, color: AppColors.textPrimary),
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: PinNumericKeypad(
+                  enabled: !_busy,
+                  onDigit: _onDigit,
+                  onBackspace: _delete,
+                ),
               ),
               const SizedBox(height: 6),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _KeyRow extends StatelessWidget {
-  const _KeyRow({required this.keys, required this.onTap});
-
-  final List<String> keys;
-  final ValueChanged<String> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        for (final k in keys) ...[
-          _KeyButton(label: k, onTap: () => onTap(k)),
-          if (k != keys.last) const SizedBox(width: 12),
-        ],
-      ],
-    );
-  }
-}
-
-class _KeyButton extends StatelessWidget {
-  const _KeyButton({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 88,
-        height: 54,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceElevated,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Center(
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
-            ),
           ),
         ),
       ),

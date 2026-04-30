@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,7 +17,8 @@ class WelcomeScreen extends StatefulWidget {
 
   static const Color _primaryGradientStart = Color(0xFF6E9BFC);
   static const Color _primaryGradientEnd = Color(0xFFA246EF);
-  static Color get _secondaryFill => const Color(0xFF111116).withValues(alpha: 0.40);
+  static Color get _secondaryFill =>
+      const Color(0xFF111116).withValues(alpha: 0.40);
 
   static TextStyle get buttonTextStyle => const TextStyle(
         fontFamily: buttonFontFamily,
@@ -32,13 +35,21 @@ class WelcomeScreen extends StatefulWidget {
 class _WelcomeScreenState extends State<WelcomeScreen> {
   static const _revealDelay = Duration(milliseconds: 720);
   bool _showActions = false;
+  Timer? _revealTimer;
 
   @override
   void initState() {
     super.initState();
-    Future<void>.delayed(_revealDelay, () {
-      if (mounted) setState(() => _showActions = true);
+    _revealTimer = Timer(_revealDelay, () {
+      if (!mounted) return;
+      setState(() => _showActions = true);
     });
+  }
+
+  @override
+  void dispose() {
+    _revealTimer?.cancel();
+    super.dispose();
   }
 
   @override

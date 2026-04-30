@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:decimal/decimal.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -7,9 +9,9 @@ import 'package:provider/provider.dart';
 import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
+import '../services/wallet/chain_rules.dart';
 import '../services/wallet/wallet_gas_price_service.dart';
 import '../services/wallet/wallet_estimate_gas_service.dart';
-import '../services/wallet/tron_utils.dart';
 import '../widgets/pin_verify_sheet.dart';
 import 'address_book_screen.dart';
 
@@ -66,10 +68,12 @@ class _TokenItem {
 }
 
 class TransferScreen extends StatefulWidget {
-  const TransferScreen({super.key, this.initialRecipientAddress, this.initialChain});
+  const TransferScreen(
+      {super.key, this.initialRecipientAddress, this.initialChain});
 
   /// 从交易详情「转账给他/她」进入时预填收款地址（含 `0x`）。
   final String? initialRecipientAddress;
+
   /// 进入时默认选中的后端 `chain` 查询参数（如 ETH/BSC/TRX）；为空则使用当前全局筛选 [WalletController.sendChain]。
   final String? initialChain;
 
@@ -241,7 +245,10 @@ class _TransferScreenState extends State<TransferScreen> {
     _usd.addListener(_onUsdFieldChanged);
     final init = widget.initialRecipientAddress?.trim();
     if (init != null && init.isNotEmpty) {
-      _address.text = init.startsWith('0x') ? init : '0x$init';
+      final kind = ChainRules.kindFromChainQuery(widget.initialChain);
+      _address.text = kind == ChainKind.unknown
+          ? init
+          : ChainRules.formatAddressForUi(kind, init);
     }
   }
 
@@ -472,7 +479,7 @@ class _TransferScreenState extends State<TransferScreen> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '请确保您的收款地址支持${sel.network}（EVM）网络。',
+                        '请确保您的收款地址支持${sel.network}（${wallet.backendChains.firstWhere((c) => c.walletApiChainQuery == wallet.chainParamForCoin(sel.coin), orElse: () => wallet.backendChains.first).chainType.trim().toUpperCase()}）网络。',
                         style: const TextStyle(
                             color: AppColors.textSecondary, fontSize: 14),
                       ),
@@ -751,9 +758,14 @@ class _TransferScreenState extends State<TransferScreen> {
       setState(() {
         _selectedTokenIndex = tokens.indexOf(token);
         if (_selectedTokenIndex < 0) _selectedTokenIndex = 0;
+        // 切换币种/网络后，清空输入，避免跨币种残留导致误转。
+        _address.clear();
+        _amount.clear();
+        _usd.clear();
       });
       if (mounted) {
         _syncUsdFromAmount(context.read<WalletController>());
+        setState(() {}); // 触发按钮可用态与错误提示重算
       }
     }
   }
@@ -787,12 +799,11 @@ class _TransferScreenState extends State<TransferScreen> {
       (c) => c.walletApiChainQuery == chainQuery,
       orElse: () => wallet.backendChains.first,
     );
-    final isTron = chainCfg.chainType.toUpperCase() == 'TRON';
+    final kind = ChainRules.kindFromChainType(chainCfg.chainType);
+    final isTron = kind == ChainKind.tron;
     final from = (isTron ? wallet.tronAddress : wallet.addressHex) ?? '';
     final toNorm = _normalizeAddrField(_address.text);
-    final isToValid = isTron
-        ? isValidTronAddress(toNorm)
-        : RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(toNorm);
+    final isToValid = ChainRules.isValidAddress(kind, toNorm);
     if (!isToValid) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -805,10 +816,9 @@ class _TransferScreenState extends State<TransferScreen> {
       );
       return;
     }
-    final fromNorm = isTron
-        ? from
-        : (from.startsWith('0x') || from.startsWith('0X') ? from : '0x$from');
-    if (toNorm.toLowerCase() == fromNorm.toLowerCase()) {
+    final fromKey = ChainRules.normalizeAddressForStorage(kind, from);
+    final toKey = ChainRules.normalizeAddressForStorage(kind, toNorm);
+    if (toKey.isNotEmpty && fromKey.isNotEmpty && toKey == fromKey) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('收款地址不能与当前钱包相同，请填写对方地址')),
       );
@@ -885,9 +895,8 @@ class _TransferScreenState extends State<TransferScreen> {
           Expanded(
             child: TextField(
               controller: controller,
-              keyboardType: isAddressField
-                  ? TextInputType.multiline
-                  : keyboardType,
+              keyboardType:
+                  isAddressField ? TextInputType.multiline : keyboardType,
               textInputAction:
                   isAddressField ? TextInputAction.newline : textInputAction,
               minLines: isAddressField ? 1 : null,
@@ -988,6 +997,39 @@ Widget _transferKvRow(String left, String right,
   );
 }
 
+/// 更紧凑的 KV：优先单行显示，内容过长时最多换两行。
+Widget _transferKvRowCompact(String left, String right) {
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 96,
+        child: Text(
+          left,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Text(
+          right,
+          textAlign: TextAlign.right,
+          softWrap: true,
+          maxLines: 2,
+          overflow: TextOverflow.visible,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 14,
+            height: 1.35,
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
 class _TransferConfirmSheet extends StatefulWidget {
   const _TransferConfirmSheet({
     required this.hostContext,
@@ -1022,6 +1064,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   bool _limitLoading = true;
   WalletGasPriceQuote? _gasQuote;
   int? _gasLimit;
+  Map<String, dynamic>? _tronEstimate;
 
   WalletGasPriceService get _gasSvc => WalletGasPriceService();
   WalletEstimateGasService get _estimateGasSvc => WalletEstimateGasService();
@@ -1034,6 +1077,48 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
 
   bool get _feeLoading => _priceLoading || _limitLoading;
 
+  static Map<String, dynamic>? _parseTronEstimate(Object? data) {
+    if (data is! Map) return null;
+    try {
+      final m = Map<String, dynamic>.from(data);
+      // v2 预期字段：bandwidth/bandwidthConsume/energy/energyConsume/energyUserPaid/stakedEnergy/otherTRXConsume
+      // 若结构变化，这里至少保证不抛异常，返回 null。
+      if (m.isEmpty) return null;
+      return m;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static int _asInt(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.round();
+    if (v is String) return int.tryParse(v) ?? 0;
+    return 0;
+  }
+
+  static String _fmtInt(Object? v) => _asInt(v).toString();
+
+  static Decimal _asDecimal(Object? v) {
+    if (v == null) return Decimal.zero;
+    if (v is Decimal) return v;
+    try {
+      return Decimal.parse(v.toString());
+    } catch (_) {
+      return Decimal.zero;
+    }
+  }
+
+  static String _fmtTrx(Object? v) {
+    final d = _asDecimal(v);
+    if (d == Decimal.zero) return '0';
+    final s = d.toString();
+    // 简单去尾零（避免 1.0000）
+    return s.contains('.')
+        ? s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '')
+        : s;
+  }
+
   Future<void> _refreshFeeData({required bool isInitial}) async {
     if (!mounted) return;
     if (isInitial) {
@@ -1042,6 +1127,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
         _limitLoading = true;
         _gasQuote = null;
         _gasLimit = null;
+        _tronEstimate = null;
       });
     }
 
@@ -1053,31 +1139,55 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     _isTron ??= isTron;
     if (isTron) {
       // TRON 不展示矿工费（能量/带宽模型），且不应阻塞“转出”按钮。
+      // 但仍需调用 estimateGasV2（优先 V2，失败回退旧版）以适配后端新接口与未来展示/校验需求。
+      final owner = widget.wallet.tronAddress;
+      final amount = double.tryParse(widget.amountStr);
+      int? fromApi;
+      Map<String, dynamic>? tronM;
+      if (owner != null && owner.isNotEmpty && amount != null) {
+        final data = await _estimateGasSvc.estimateGasPreferV2(
+          chain: _chainCode,
+          coin: widget.sel.symbol,
+          ownerAddress: owner,
+          toAddress: widget.toAddressNormalized,
+          amount: amount,
+          requireGasLimit: false,
+        );
+        if (kDebugMode) {
+          debugPrint('estimateGasPreferV2(TRON) data: $data');
+        }
+        fromApi = WalletEstimateGasService.parseGasLimit(data);
+        tronM = _parseTronEstimate(data);
+        if (kDebugMode) {
+          debugPrint('estimateGasPreferV2(TRON) parsed gasLimit: $fromApi');
+        }
+      }
       if (!mounted) return;
       setState(() {
         _gasQuote = null;
-        _gasLimit = null;
+        _gasLimit = fromApi; // TRON 当前不使用 gasLimit 展示，但保留兼容
+        _tronEstimate = tronM;
         _priceLoading = false;
         _limitLoading = false;
       });
       return;
     }
     final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
-    final owner =
-        isTron ? widget.wallet.tronAddress : widget.wallet.addressHex;
+    final owner = isTron ? widget.wallet.tronAddress : widget.wallet.addressHex;
     final amount = double.tryParse(widget.amountStr);
     int? fromApi;
     if (owner == null || owner.isEmpty || amount == null) {
       fromApi = null;
     } else {
-      final data = await _estimateGasSvc.estimateGas(
+      final normalizedOwner = isTron
+          ? owner
+          : (owner.startsWith('0x') || owner.startsWith('0X')
+              ? owner
+              : '0x$owner');
+      final data = await _estimateGasSvc.estimateGasPreferV2(
         chain: _chainCode,
         coin: widget.sel.symbol,
-        ownerAddress: isTron
-            ? owner
-            : (owner.startsWith('0x') || owner.startsWith('0X')
-                ? owner
-                : '0x$owner'),
+        ownerAddress: normalizedOwner,
         toAddress: widget.toAddressNormalized,
         amount: amount,
       );
@@ -1116,6 +1226,17 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       return '正在获取矿工费…';
     }
     if (_isTron == true) {
+      final m = _tronEstimate;
+      if (m == null) return '—';
+      final total = _asDecimal(m['bandwidthConsume']) +
+          _asDecimal(m['energyConsume']) +
+          _asDecimal(m['otherTRXConsume']);
+      if (total > Decimal.zero) {
+        return '预计消耗 ${_fmtTrx(total)} TRX';
+      }
+      final bw = _asInt(m['bandwidth']);
+      final en = _asInt(m['energy']);
+      if (bw > 0 || en > 0) return '带宽 $bw · 能量 $en';
       return '—';
     }
     if (quote == null) {
@@ -1234,6 +1355,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   @override
   Widget build(BuildContext context) {
     final quote = _gasQuote;
+    final tron = _tronEstimate;
+    final tronTitle = _isTron == true ? '资源消耗' : '矿工费';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1292,15 +1415,68 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             const SizedBox(height: 8),
             _transferConfirmCard(
               children: [
-                if (_isTron != true) ...[
-                  _transferKvRow('矿工费', _gasFeeTitle(quote)),
+                if (_isTron == true) ...[
+                  if (tron != null) ...[
+                    // Resources 行：按规则动态拼接
+                    Builder(builder: (context) {
+                      final bwFee = _asDecimal(tron['bandwidthConsume']);
+                      final enFee = _asDecimal(tron['energyConsume']);
+                      final otherFee = _asDecimal(tron['otherTRXConsume']);
+                      final totalFee = bwFee + enFee + otherFee;
+
+                      final bw = _asInt(tron['bandwidth']);
+                      final en = _asInt(tron['energy']);
+                      final staked = _asInt(tron['stakedEnergy']);
+
+                      final showBandwidth = bw > 0 && bwFee == Decimal.zero;
+                      final showEnergy = en > 0;
+                      final showStakedEnergy = staked > 0;
+
+                      final parts = <String>[];
+                      if (showBandwidth) {
+                        parts.add('${_fmtInt(bw)} Bandwidth');
+                      }
+                      if (showEnergy) {
+                        parts.add('${_fmtInt(en)} Energy');
+                      }
+                      if (showStakedEnergy) {
+                        // 需求：stakedEnergy > 0 时显示在资源里 {stakedEnergy} Energy
+                        parts.add('${_fmtInt(staked)} Energy');
+                      }
+
+                      final showResources = parts.isNotEmpty;
+                      final showTrx = totalFee > Decimal.zero;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (showResources) ...[
+                            _transferKvRowCompact(
+                                'Resources', parts.join(' + ')),
+                          ],
+                          if (showResources && showTrx)
+                            const SizedBox(height: 10),
+                          if (showTrx) ...[
+                            _transferKvRowCompact(
+                              'TRX',
+                              '≈ ${_fmtTrx(totalFee)} TRX',
+                            ),
+                          ],
+                          if (!showResources && !showTrx)
+                            _transferKvRowCompact('Resources', '—'),
+                        ],
+                      );
+                    }),
+                  ] else ...[
+                    _transferKvRowCompact('Resources', '—'),
+                  ],
+                ] else ...[
+                  _transferKvRow(tronTitle, _gasFeeTitle(quote)),
                   const SizedBox(height: 10),
-                ],
-                _transferKvRow(
-                  '支付方式',
-                  '${widget.sel.symbol}（${widget.sel.network}）',
-                ),
-                if (_isTron != true) ...[
+                  _transferKvRow(
+                    '支付方式',
+                    '${widget.sel.symbol}（${widget.sel.network}）',
+                  ),
                   const SizedBox(height: 12),
                   Row(
                     children: [

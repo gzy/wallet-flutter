@@ -4,7 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/chain_transaction_vo.dart';
 import '../models/coin_data.dart';
+import '../services/wallet/chain_rules.dart';
 import '../theme/app_colors.dart';
+import '../widgets/coin_icon.dart';
 import 'transfer_screen.dart';
 
 /// 与列表页一致的数量展示（避免过长小数）。
@@ -49,15 +51,20 @@ String _formatFullDateTime(DateTime? t) {
   return '${x.year}-${two(x.month)}-${two(x.day)} ${two(x.hour)}:${two(x.minute)}:${two(x.second)}';
 }
 
-String _midTruncHash(String hash) {
-  final h = hash.trim().startsWith('0x') ? hash.trim() : '0x${hash.trim()}';
+String _midTruncHash(String hash, {required bool isTron}) {
+  final raw = hash.trim();
+  final h = isTron ? raw : (raw.startsWith('0x') ? raw : '0x$raw');
   if (h.length <= 22) {
     return h;
   }
   return '${h.substring(0, 8)}…${h.substring(h.length - 8)}';
 }
 
-bool _txOutgoing(ChainTransactionVo tx, String? walletHex) {
+bool _txOutgoing(
+  ChainTransactionVo tx,
+  String? walletAddress, {
+  required bool isTron,
+}) {
   final fd = tx.fundDirection?.toLowerCase().trim();
   if (fd == 'out' || fd == 'send' || fd == 'outgoing') {
     return true;
@@ -65,12 +72,12 @@ bool _txOutgoing(ChainTransactionVo tx, String? walletHex) {
   if (fd == 'in' || fd == 'receive' || fd == 'incoming') {
     return false;
   }
-  final w = _normWalletHex(walletHex);
+  final w = _normWalletAddr(walletAddress, isTron: isTron);
   if (w.isEmpty) {
     return false;
   }
-  final from = _normAddr(tx.fromAddress);
-  final to = _normAddr(tx.toAddress);
+  final from = _normAddr(tx.fromAddress, isTron: isTron);
+  final to = _normAddr(tx.toAddress, isTron: isTron);
   if (from == w && to != w) {
     return true;
   }
@@ -80,26 +87,34 @@ bool _txOutgoing(ChainTransactionVo tx, String? walletHex) {
   return false;
 }
 
-String _normWalletHex(String? raw) {
+String _normWalletAddr(String? raw, {required bool isTron}) {
   if (raw == null) {
     return '';
   }
-  final s = raw.trim().toLowerCase();
+  final s = raw.trim();
   if (s.isEmpty) {
     return '';
   }
-  return s.startsWith('0x') ? s : '0x$s';
+  if (isTron) {
+    return s;
+  }
+  final x = s.toLowerCase();
+  return x.startsWith('0x') ? x : '0x$x';
 }
 
-String _normAddr(String? raw) {
+String _normAddr(String? raw, {required bool isTron}) {
   if (raw == null) {
     return '';
   }
-  final s = raw.trim().toLowerCase();
+  final s = raw.trim();
   if (s.isEmpty) {
     return '';
   }
-  return s.startsWith('0x') ? s : '0x$s';
+  if (isTron) {
+    return s;
+  }
+  final x = s.toLowerCase();
+  return x.startsWith('0x') ? x : '0x$x';
 }
 
 /// 后端 `status`：0 / 1 视为链上成功态（与设计稿「交易成功」一致）。
@@ -163,7 +178,10 @@ Uri? _txExplorerUri(ChainTransactionVo detail, CoinData coin, String rawHash) {
   if (link != null && link.isNotEmpty) {
     return Uri.tryParse(link);
   }
-  final h = rawHash.trim().startsWith('0x') ? rawHash.trim() : '0x${rawHash.trim()}';
+  final isTron =
+      ChainRules.kindFromChainQuery(coin.walletApiChainQuery) == ChainKind.tron;
+  final raw = rawHash.trim();
+  final h = isTron ? raw : (raw.startsWith('0x') ? raw : '0x$raw');
   final p = coin.txUrlPrefix?.trim();
   if (p == null || p.isEmpty) {
     return null;
@@ -227,7 +245,9 @@ class WalletTransactionDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final outgoing = _txOutgoing(detail, walletHex);
+    final isTron = ChainRules.kindFromChainQuery(coin.walletApiChainQuery) ==
+        ChainKind.tron;
+    final outgoing = _txOutgoing(detail, walletHex, isTron: isTron);
     final title = outgoing ? '转出' : '收款';
     final sym = detail.crypto?.trim().isNotEmpty == true
         ? detail.crypto!.trim()
@@ -244,7 +264,8 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     final counterparty = _counterpartyAddress(detail);
     final canTransfer = counterparty != null &&
         counterparty.isNotEmpty &&
-        _normAddr(counterparty) != _normWalletHex(walletHex);
+        _normAddr(counterparty, isTron: isTron) !=
+            _normWalletAddr(walletHex, isTron: isTron);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -298,7 +319,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   _addressCard(context, from, to),
                   const SizedBox(height: 12),
-                  _chainCard(context, hash),
+                  _chainCard(context, hash, isTron: isTron),
                 ],
               ),
             ),
@@ -318,6 +339,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                             MaterialPageRoute<void>(
                               builder: (_) => TransferScreen(
                                 initialRecipientAddress: counterparty,
+                                initialChain: coin.walletApiChainQuery,
                               ),
                             ),
                           );
@@ -357,7 +379,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Text(coin.icon, style: const TextStyle(fontSize: 44, height: 1)),
+          CoinIcon(symbol: coin.symbol, size: 44),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -539,7 +561,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _chainCard(BuildContext context, String hash) {
+  Widget _chainCard(BuildContext context, String hash, {required bool isTron}) {
     final block = detail.blockNumber?.trim() ?? '';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -588,7 +610,9 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(
                                 vertical: 4, horizontal: 2),
                             child: Text(
-                              hash.isEmpty ? '—' : _midTruncHash(hash),
+                              hash.isEmpty
+                                  ? '—'
+                                  : _midTruncHash(hash, isTron: isTron),
                               textAlign: TextAlign.end,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,

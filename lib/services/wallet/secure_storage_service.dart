@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../models/recent_recipient.dart';
 import '../../models/stored_wallet.dart';
+import 'chain_rules.dart';
 import 'pin_crypto.dart';
 
 class SecureStorageService {
@@ -92,7 +93,8 @@ class SecureStorageService {
   Future<String?> readMnemonicForWallet(String id) =>
       _storage.read(key: _mnemonicKey(id), iOptions: _iosOptions);
 
-  Future<void> writeMnemonicForWallet(String id, String mnemonic) => _storage.write(
+  Future<void> writeMnemonicForWallet(String id, String mnemonic) =>
+      _storage.write(
         key: _mnemonicKey(id),
         value: mnemonic.trim(),
         iOptions: _iosOptions,
@@ -121,13 +123,16 @@ class SecureStorageService {
     if (a.isEmpty) {
       return;
     }
-    if (!a.toLowerCase().startsWith('0x')) {
-      a = '0x$a';
-    }
-    a = a.toLowerCase();
     final chainNorm = c.toUpperCase();
+    final kind = ChainRules.kindFromChainQuery(c);
+    a = ChainRules.normalizeAddressForStorage(kind, a);
+    // 防止历史/异常数据污染最近列表（尤其是 TRON 被错误 lowercased 之类）。
+    if (kind != ChainKind.unknown && !ChainRules.isValidAddress(kind, a)) {
+      return;
+    }
     var items = <Map<String, dynamic>>[];
-    final raw = await _storage.read(key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
+    final raw = await _storage.read(
+        key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
     if (raw != null && raw.isNotEmpty) {
       try {
         final list = jsonDecode(raw) as List<dynamic>;
@@ -141,7 +146,11 @@ class SecureStorageService {
     items = items
         .where((e) =>
             (e['chain']?.toString() ?? '').toUpperCase() != chainNorm ||
-            (e['address']?.toString() ?? '').toLowerCase() != a)
+            ChainRules.normalizeAddressForStorage(
+                  kind,
+                  (e['address']?.toString() ?? ''),
+                ) !=
+                a)
         .toList();
     final now = DateTime.now().millisecondsSinceEpoch;
     items.insert(0, {'chain': c, 'address': a, 'atMs': now});
@@ -165,13 +174,16 @@ class SecureStorageService {
     if (want.isEmpty) {
       return const [];
     }
-    final raw = await _storage.read(key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
+    final kind = ChainRules.kindFromChainQuery(chainQuery);
+    final raw = await _storage.read(
+        key: _recentRecipientsKey(walletId), iOptions: _iosOptions);
     if (raw == null || raw.isEmpty) {
       return const [];
     }
     try {
       final list = jsonDecode(raw) as List<dynamic>;
       final out = <RecentRecipient>[];
+      final seen = <String>{};
       for (final e in list) {
         if (e is! Map) {
           continue;
@@ -180,7 +192,27 @@ class SecureStorageService {
         if ((m['chain']?.toString() ?? '').toUpperCase() != want) {
           continue;
         }
-        out.add(RecentRecipient.fromJson(m));
+        final addrRaw = m['address']?.toString() ?? '';
+        final addr = ChainRules.normalizeAddressForStorage(kind, addrRaw);
+        if (addr.isEmpty) {
+          continue;
+        }
+        if (kind != ChainKind.unknown &&
+            !ChainRules.isValidAddress(kind, addr)) {
+          // 过滤无效地址（常见于历史把 TRON 地址错误转小写/加 0x 后造成的脏数据）。
+          continue;
+        }
+        if (!seen.add(addr)) {
+          continue;
+        }
+        out.add(
+          RecentRecipient(
+            address: addr,
+            atMs: (m['atMs'] is int)
+                ? m['atMs'] as int
+                : int.tryParse(m['atMs']?.toString() ?? '') ?? 0,
+          ),
+        );
       }
       return out;
     } catch (_) {
@@ -189,7 +221,8 @@ class SecureStorageService {
   }
 
   Future<Set<String>> readHiddenCoinIdsForWallet(String id) async {
-    final raw = await _storage.read(key: _hiddenCoinsKey(id), iOptions: _iosOptions);
+    final raw =
+        await _storage.read(key: _hiddenCoinsKey(id), iOptions: _iosOptions);
     if (raw == null || raw.isEmpty) return <String>{};
     try {
       final list = jsonDecode(raw) as List<dynamic>;
@@ -199,9 +232,11 @@ class SecureStorageService {
     }
   }
 
-  Future<void> writeHiddenCoinIdsForWallet(String id, Set<String> hidden) async {
+  Future<void> writeHiddenCoinIdsForWallet(
+      String id, Set<String> hidden) async {
     final json = jsonEncode(hidden.toList()..sort());
-    await _storage.write(key: _hiddenCoinsKey(id), value: json, iOptions: _iosOptions);
+    await _storage.write(
+        key: _hiddenCoinsKey(id), value: json, iOptions: _iosOptions);
   }
 
   Future<bool> readBackedUpForWallet(String id) async {
@@ -225,8 +260,10 @@ class SecureStorageService {
     final hash = PinCrypto.hashPin(pin, salt);
     await _storage.write(key: _kPinSalt, value: salt, iOptions: _iosOptions);
     await _storage.write(key: _kPinHash, value: hash, iOptions: _iosOptions);
-    await _storage.write(key: _kPinFailCount, value: '0', iOptions: _iosOptions);
-    await _storage.write(key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
+    await _storage.write(
+        key: _kPinFailCount, value: '0', iOptions: _iosOptions);
+    await _storage.write(
+        key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
   }
 
   /// 上次成功解锁会话的时间戳（毫秒），按钱包维度存储。
@@ -252,7 +289,8 @@ class SecureStorageService {
   }
 
   Future<int> _lockRemainingSeconds() async {
-    final untilRaw = await _storage.read(key: _kPinLockUntilMs, iOptions: _iosOptions);
+    final untilRaw =
+        await _storage.read(key: _kPinLockUntilMs, iOptions: _iosOptions);
     final until = int.tryParse(untilRaw ?? '0') ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch;
     final remainMs = until - now;
@@ -265,12 +303,13 @@ class SecureStorageService {
     return int.tryParse(raw ?? '0') ?? 0;
   }
 
-  Future<void> _writeFailCount(int value) =>
-      _storage.write(key: _kPinFailCount, value: value.toString(), iOptions: _iosOptions);
+  Future<void> _writeFailCount(int value) => _storage.write(
+      key: _kPinFailCount, value: value.toString(), iOptions: _iosOptions);
 
   Future<void> _setLockFor(Duration d) async {
     final until = DateTime.now().add(d).millisecondsSinceEpoch;
-    await _storage.write(key: _kPinLockUntilMs, value: until.toString(), iOptions: _iosOptions);
+    await _storage.write(
+        key: _kPinLockUntilMs, value: until.toString(), iOptions: _iosOptions);
   }
 
   /// PIN 校验（带输错次数限制与冷却锁定）
@@ -294,7 +333,8 @@ class SecureStorageService {
     final ok = PinCrypto.hashPin(pin, salt) == hash;
     if (ok) {
       await _writeFailCount(0);
-      await _storage.write(key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
+      await _storage.write(
+          key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
       return const PinVerifyResult(ok: true);
     }
 

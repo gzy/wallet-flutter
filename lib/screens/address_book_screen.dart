@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/recent_recipient.dart';
 import '../models/stored_wallet.dart';
 import '../providers/wallet_controller.dart';
+import '../services/wallet/chain_rules.dart';
 import '../theme/app_colors.dart';
 
 /// 地址簿页与设计稿对齐的局部色（不改动全局 [AppColors]）。
@@ -18,6 +19,16 @@ String _shortAddr(String hex) {
     return h;
   }
   return '${h.substring(0, 16)}…${h.substring(h.length - 16)}';
+}
+
+String _shortAddrForChain(String addr, {required bool isTron}) {
+  final a = addr.trim();
+  if (a.isEmpty) return a;
+  if (isTron) {
+    if (a.length <= 18) return a;
+    return '${a.substring(0, 10)}…${a.substring(a.length - 10)}';
+  }
+  return _shortAddr(a);
 }
 
 /// 转账页进入的地址簿：最近（成功广播后写入）/ 我的钱包 / 保存的地址（占位）。
@@ -62,19 +73,25 @@ class _AddressBookScreenState extends State<AddressBookScreen>
 
   @override
   Widget build(BuildContext context) {
+    final kind = ChainRules.kindFromChainQuery(widget.chainQuery);
+    final isTron = kind == ChainKind.tron;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.background,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary, size: 20),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.textPrimary, size: 20),
           onPressed: () => Navigator.of(context).pop(),
         ),
         centerTitle: true,
         title: const Text(
           '地址簿',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+          style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary),
         ),
         actions: [
           IconButton(
@@ -95,8 +112,10 @@ class _AddressBookScreenState extends State<AddressBookScreen>
           dividerHeight: 1,
           labelColor: _addressBookTabAccent,
           unselectedLabelColor: _addressBookTabInactive,
-          labelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, letterSpacing: -0.2),
-          unselectedLabelStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, letterSpacing: -0.2),
+          labelStyle: const TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w600, letterSpacing: -0.2),
+          unselectedLabelStyle: const TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w500, letterSpacing: -0.2),
           overlayColor: WidgetStateProperty.all(Colors.transparent),
           splashFactory: NoSplash.splashFactory,
           tabs: const [
@@ -112,10 +131,12 @@ class _AddressBookScreenState extends State<AddressBookScreen>
           _RecentTab(
             networkLabel: widget.networkLabel,
             chainQuery: widget.chainQuery,
+            isTron: isTron,
             onPickAddress: (hex) => Navigator.of(context).pop<String>(hex),
           ),
           _MyWalletsTab(
             networkLabel: widget.networkLabel,
+            isTron: isTron,
             onPickAddress: (hex) => Navigator.of(context).pop<String>(hex),
           ),
           _SavedContactsTab(symbol: widget.symbol),
@@ -129,11 +150,13 @@ class _RecentTab extends StatefulWidget {
   const _RecentTab({
     required this.networkLabel,
     required this.chainQuery,
+    required this.isTron,
     required this.onPickAddress,
   });
 
   final String networkLabel;
   final String chainQuery;
+  final bool isTron;
   final ValueChanged<String> onPickAddress;
 
   @override
@@ -206,7 +229,9 @@ class _RecentTabState extends State<_RecentTab> {
               ),
               const SizedBox(height: 6),
               Text(
-                '（${widget.networkLabel} · EVM）',
+                widget.isTron
+                    ? '（${widget.networkLabel} · TRON）'
+                    : '（${widget.networkLabel} · EVM）',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: AppColors.textMuted.withValues(alpha: 0.9),
@@ -226,12 +251,14 @@ class _RecentTabState extends State<_RecentTab> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final r = _items[i];
-        final hex = r.address.startsWith('0x') ? r.address : '0x${r.address}';
+        final addr = widget.isTron
+            ? ChainRules.formatAddressForUi(ChainKind.tron, r.address)
+            : ChainRules.formatAddressForUi(ChainKind.evm, r.address);
         return Material(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
-            onTap: () => widget.onPickAddress(hex),
+            onTap: () => widget.onPickAddress(addr),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -257,7 +284,7 @@ class _RecentTabState extends State<_RecentTab> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _shortAddr(hex),
+                          _shortAddrForChain(addr, isTron: widget.isTron),
                           style: const TextStyle(
                             color: AppColors.textPrimary,
                             fontSize: 15,
@@ -271,7 +298,7 @@ class _RecentTabState extends State<_RecentTab> {
                           runSpacing: 6,
                           children: [
                             _recentChip(widget.networkLabel),
-                            _recentChip('EVM'),
+                            _recentChip(widget.isTron ? 'TRON' : 'EVM'),
                           ],
                         ),
                       ],
@@ -304,10 +331,12 @@ class _RecentTabState extends State<_RecentTab> {
 class _MyWalletsTab extends StatelessWidget {
   const _MyWalletsTab({
     required this.networkLabel,
+    required this.isTron,
     required this.onPickAddress,
   });
 
   final String networkLabel;
+  final bool isTron;
   final ValueChanged<String> onPickAddress;
 
   @override
@@ -328,6 +357,7 @@ class _MyWalletsTab extends StatelessWidget {
         return _WalletAddressTile(
           wallet: w,
           networkLabel: networkLabel,
+          isTron: isTron,
           onTap: onPickAddress,
         );
       },
@@ -339,11 +369,13 @@ class _WalletAddressTile extends StatefulWidget {
   const _WalletAddressTile({
     required this.wallet,
     required this.networkLabel,
+    required this.isTron,
     required this.onTap,
   });
 
   final StoredWallet wallet;
   final String networkLabel;
+  final bool isTron;
   final ValueChanged<String> onTap;
 
   @override
@@ -351,7 +383,7 @@ class _WalletAddressTile extends StatefulWidget {
 }
 
 class _WalletAddressTileState extends State<_WalletAddressTile> {
-  String? _hex;
+  String? _addr;
   bool _loading = true;
 
   @override
@@ -362,13 +394,17 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
 
   Future<void> _load() async {
     final wc = context.read<WalletController>();
-    final h = await wc.readAddressHexForWallet(widget.wallet.id);
+    final h = widget.isTron
+        ? await wc.readTronAddressForWallet(widget.wallet.id)
+        : await wc.readAddressHexForWallet(widget.wallet.id);
     if (!mounted) {
       return;
     }
     setState(() {
-      _hex = h != null && h.isNotEmpty
-          ? (h.startsWith('0x') || h.startsWith('0X') ? h : '0x$h')
+      _addr = h != null && h.isNotEmpty
+          ? (widget.isTron
+              ? h.trim()
+              : (h.startsWith('0x') || h.startsWith('0X') ? h : '0x$h'))
           : null;
       _loading = false;
     });
@@ -379,11 +415,13 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
     if (_loading) {
       return const Padding(
         padding: EdgeInsets.all(20),
-        child: Center(child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 2)),
+        child: Center(
+            child: CircularProgressIndicator(
+                color: AppColors.accent, strokeWidth: 2)),
       );
     }
-    final hex = _hex;
-    if (hex == null) {
+    final addr = _addr;
+    if (addr == null) {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -400,7 +438,7 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
       color: AppColors.surface,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
-        onTap: () => widget.onTap(hex),
+        onTap: () => widget.onTap(addr),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -414,7 +452,8 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
                   color: AppColors.surfaceElevated,
                   borderRadius: BorderRadius.circular(22),
                 ),
-                child: const Icon(Icons.account_balance_wallet_outlined, color: AppColors.textSecondary, size: 22),
+                child: const Icon(Icons.account_balance_wallet_outlined,
+                    color: AppColors.textSecondary, size: 22),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -431,8 +470,11 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      _shortAddr(hex),
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.35),
+                      _shortAddrForChain(addr, isTron: widget.isTron),
+                      style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                          height: 1.35),
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -440,7 +482,7 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
                       runSpacing: 6,
                       children: [
                         _chip(widget.networkLabel),
-                        _chip('EVM'),
+                        _chip(widget.isTron ? 'TRON' : 'EVM'),
                       ],
                     ),
                   ],
@@ -460,7 +502,8 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
         color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+      child: Text(label,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
     );
   }
 }
@@ -478,12 +521,14 @@ class _SavedContactsTab extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.find_in_page_outlined, size: 56, color: AppColors.textMuted.withValues(alpha: 0.55)),
+            Icon(Icons.find_in_page_outlined,
+                size: 56, color: AppColors.textMuted.withValues(alpha: 0.55)),
             const SizedBox(height: 18),
             const Text(
               '没有当前币种可用的地址',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 14, height: 1.4),
+              style: TextStyle(
+                  color: AppColors.textSecondary, fontSize: 14, height: 1.4),
             ),
             const SizedBox(height: 8),
             Text(

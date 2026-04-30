@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:wallet_flutter/screens/coin_detail_screen.dart';
 import '../../../models/coin_data.dart';
 import '../../../theme/app_colors.dart';
+import '../../../widgets/coin_icon.dart';
 
 /// 控制代币数量显示长度，避免 `double.toString()` 撑破一行。
 String _formatAssetBalance(double value) {
@@ -42,7 +43,7 @@ class WalletCoinList extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(coin.icon, style: const TextStyle(fontSize: 34, height: 1.1)),
+                    CoinIcon(symbol: coin.symbol, size: 34),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(

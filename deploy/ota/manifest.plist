@@ -18,8 +18,7 @@
 			<dict>
 				<key>bundle-identifier</key>
 				<string>com.uone.walletapp</string>
-				<key>bundle-version</key>
-				<string>1</string>
+				$11$2
 				<key>kind</key>
 				<string>software</string>
 				<key>title</key>

@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
+import '../services/wallet/chain_rules.dart';
 import '../theme/app_colors.dart';
 
 class ReceiveScreen extends StatefulWidget {
@@ -174,8 +175,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       (c) => c.walletApiChainQuery == token.chain,
       orElse: () => wallet.backendChains.first,
     );
-    final isTron = cfg.chainType.trim().toUpperCase() == 'TRON';
-    final address = isTron ? tronAddress : evmAddress;
+    final kind = ChainRules.kindFromChainType(cfg.chainType);
+    final address = kind == ChainKind.tron ? tronAddress : evmAddress;
     if (address == null || address.isEmpty) {
       return Scaffold(
         backgroundColor: AppColors.background,
@@ -308,9 +309,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                                             width: 0.8,
                                           ),
                                         ),
-                                        child: const Text(
-                                          'EVM',
-                                          style: TextStyle(
+                                        child: Text(
+                                          ChainRules.badgeLabel(kind),
+                                          style: const TextStyle(
                                             color: AppColors.textSecondary,
                                             fontSize: 9,
                                             fontWeight: FontWeight.w700,
@@ -390,9 +391,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                                     ],
                                   ),
                                   alignment: Alignment.center,
-                                  child: const Text(
-                                    'EVM',
-                                    style: TextStyle(
+                                  child: Text(
+                                    ChainRules.badgeLabel(kind),
+                                    style: const TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w800,
                                       color: Color(0xFF374151),
@@ -584,7 +585,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
                       decoration: const BoxDecoration(
                         border: Border(
-                            bottom: BorderSide(color: AppColors.border, width: 1)),
+                            bottom:
+                                BorderSide(color: AppColors.border, width: 1)),
                       ),
                       child: Row(
                         children: [
@@ -617,7 +619,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.search, color: AppColors.textMuted),
+                            const Icon(Icons.search,
+                                color: AppColors.textMuted),
                             const SizedBox(width: 8),
                             Expanded(
                               child: TextField(
@@ -687,7 +690,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                               ),
                             ),
                             trailing: Text(
-                              t.balance == 0 ? '0' : t.balance.toStringAsFixed(8),
+                              t.balance == 0
+                                  ? '0'
+                                  : t.balance.toStringAsFixed(8),
                               style: const TextStyle(
                                 color: AppColors.textPrimary,
                                 fontSize: 15,
@@ -716,6 +721,7 @@ class _TokenOption {
   final String chain;
   final String symbol;
   final String network;
+
   /// 主卡片展示，如 `ETH (Ethereum Sepolia)`。
   final String titleLine;
   final double balance;

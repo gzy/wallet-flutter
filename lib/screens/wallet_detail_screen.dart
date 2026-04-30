@@ -55,7 +55,8 @@ class WalletDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('修改钱包名称', style: TextStyle(color: AppColors.textPrimary)),
+        title: const Text('修改钱包名称',
+            style: TextStyle(color: AppColors.textPrimary)),
         content: TextField(
           controller: ctrl,
           style: const TextStyle(color: AppColors.textPrimary),
@@ -65,8 +66,11 @@ class WalletDetailScreen extends StatelessWidget {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(ctx, ctrl.text.trim()), child: const Text('保存')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('保存')),
         ],
       ),
     );
@@ -91,10 +95,11 @@ class WalletDetailScreen extends StatelessWidget {
   Future<void> _exportPublicKey(BuildContext context) async {
     final wc = context.read<WalletController>();
     final hex = await wc.readAddressHexForWallet(wallet.id);
+    final tron = await wc.readTronAddressForWallet(wallet.id);
     if (!context.mounted) {
       return;
     }
-    if (hex == null) {
+    if ((hex == null || hex.isEmpty) && (tron == null || tron.isEmpty)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('无法读取该钱包地址')),
       );
@@ -104,15 +109,48 @@ class WalletDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('EVM 地址', style: TextStyle(color: AppColors.textPrimary, fontSize: 16)),
-        content: SelectableText(
-          hex.startsWith('0x') ? hex : '0x$hex',
-          style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.4),
+        title: const Text('地址',
+            style: TextStyle(color: AppColors.textPrimary, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (hex != null && hex.isNotEmpty) ...[
+              const Text('EVM',
+                  style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              SelectableText(
+                hex.startsWith('0x') ? hex : '0x$hex',
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 13, height: 1.4),
+              ),
+            ],
+            if (tron != null && tron.isNotEmpty) ...[
+              if (hex != null && hex.isNotEmpty) const SizedBox(height: 14),
+              const Text('TRON',
+                  style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              SelectableText(
+                tron,
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 13, height: 1.4),
+              ),
+            ],
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () {
-              Clipboard.setData(ClipboardData(text: hex.startsWith('0x') ? hex : '0x$hex'));
+              final text = (hex != null && hex.isNotEmpty)
+                  ? (hex.startsWith('0x') ? hex : '0x$hex')
+                  : (tron ?? '');
+              Clipboard.setData(ClipboardData(text: text));
               Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('已复制')),
@@ -120,7 +158,8 @@ class WalletDetailScreen extends StatelessWidget {
             },
             child: const Text('复制'),
           ),
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
         ],
       ),
     );
@@ -134,13 +173,16 @@ class WalletDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('删除钱包', style: TextStyle(color: AppColors.textPrimary)),
+        title:
+            const Text('删除钱包', style: TextStyle(color: AppColors.textPrimary)),
         content: Text(
           '将移除「$name」及其本地助记词，且不可恢复。确定删除？',
           style: TextStyle(color: AppColors.textSecondary.withOpacity(0.95)),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除', style: TextStyle(color: AppColors.error)),
@@ -162,13 +204,15 @@ class WalletDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('安全后缀', style: TextStyle(color: AppColors.textPrimary)),
+        title:
+            const Text('安全后缀', style: TextStyle(color: AppColors.textPrimary)),
         content: const Text(
           '从钱包名称中解析的简短标识，便于在多个钱包间区分；若名称中无「-」后缀，则使用钱包 ID 的片段。',
           style: TextStyle(color: AppColors.textSecondary, height: 1.45),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
         ],
       ),
     );
@@ -179,13 +223,15 @@ class WalletDetailScreen extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: const Text('导出公钥', style: TextStyle(color: AppColors.textPrimary)),
+        title:
+            const Text('导出公钥', style: TextStyle(color: AppColors.textPrimary)),
         content: const Text(
-          '此处展示由助记词派生的 EVM 默认账户地址，可用于收款核对。完整扩展公钥展示与二维码导出可在后续版本提供。',
+          '此处展示由助记词派生的默认地址（EVM / TRON），可用于收款核对。完整扩展公钥展示与二维码导出可在后续版本提供。',
           style: TextStyle(color: AppColors.textSecondary, height: 1.45),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
         ],
       ),
     );
@@ -213,7 +259,8 @@ class WalletDetailScreen extends StatelessWidget {
                 children: [
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary, size: 20),
+                    icon: const Icon(Icons.arrow_back_ios_new,
+                        color: AppColors.textPrimary, size: 20),
                   ),
                   const Expanded(
                     child: Text(
@@ -245,7 +292,8 @@ class WalletDetailScreen extends StatelessWidget {
                             color: Color(0xFF2C2C2C),
                             shape: BoxShape.circle,
                           ),
-                          child: const Icon(Icons.smartphone_outlined, color: AppColors.textSecondary, size: 28),
+                          child: const Icon(Icons.smartphone_outlined,
+                              color: AppColors.textSecondary, size: 28),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
@@ -265,7 +313,8 @@ class WalletDetailScreen extends StatelessWidget {
                               ),
                               IconButton(
                                 onPressed: () => _rename(context),
-                                icon: const Icon(Icons.edit_outlined, color: AppColors.textSecondary, size: 22),
+                                icon: const Icon(Icons.edit_outlined,
+                                    color: AppColors.textSecondary, size: 22),
                               ),
                             ],
                           ),
@@ -315,7 +364,9 @@ class WalletDetailScreen extends StatelessWidget {
                             label: '导出私钥',
                             onTap: () {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('请通过「备份」导出助记词；私钥明文导出高风险，后续版本再开放。')),
+                                const SnackBar(
+                                    content: Text(
+                                        '请通过「备份」导出助记词；私钥明文导出高风险，后续版本再开放。')),
                               );
                             },
                           ),
@@ -325,7 +376,8 @@ class WalletDetailScreen extends StatelessWidget {
                             onTap: () {
                               Navigator.of(context).push(
                                 MaterialPageRoute<void>(
-                                  builder: (_) => CreateWalletAccountScreen(wallet: w),
+                                  builder: (_) =>
+                                      CreateWalletAccountScreen(wallet: w),
                                 ),
                               );
                             },
@@ -349,8 +401,10 @@ class WalletDetailScreen extends StatelessWidget {
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFFFF4D4D),
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                          textStyle: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700),
                         ),
                         child: const Text('删除钱包'),
                       ),
@@ -365,7 +419,8 @@ class WalletDetailScreen extends StatelessWidget {
     );
   }
 
-  static Widget _divider() => const Divider(height: 1, thickness: 1, color: Color(0xFF2A2A2A));
+  static Widget _divider() =>
+      const Divider(height: 1, thickness: 1, color: Color(0xFF2A2A2A));
 }
 
 class _Card extends StatelessWidget {
@@ -416,7 +471,8 @@ class _InfoRow extends StatelessWidget {
                 const SizedBox(width: 4),
                 GestureDetector(
                   onTap: onHint,
-                  child: const Icon(Icons.help_outline, size: 16, color: Color(0xFF888888)),
+                  child: const Icon(Icons.help_outline,
+                      size: 16, color: Color(0xFF888888)),
                 ),
               ],
             ],
@@ -426,7 +482,10 @@ class _InfoRow extends StatelessWidget {
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: const TextStyle(color: AppColors.textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+              style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500),
             ),
           ),
         ],
@@ -462,7 +521,9 @@ class _NavRow extends StatelessWidget {
               Expanded(
                 child: Row(
                   children: [
-                    Text(label, style: const TextStyle(color: AppColors.textPrimary, fontSize: 15)),
+                    Text(label,
+                        style: const TextStyle(
+                            color: AppColors.textPrimary, fontSize: 15)),
                     if (showHint) ...[
                       const SizedBox(width: 6),
                       GestureDetector(
@@ -470,14 +531,16 @@ class _NavRow extends StatelessWidget {
                         behavior: HitTestBehavior.opaque,
                         child: const Padding(
                           padding: EdgeInsets.all(4),
-                          child: Icon(Icons.help_outline, size: 16, color: Color(0xFF888888)),
+                          child: Icon(Icons.help_outline,
+                              size: 16, color: Color(0xFF888888)),
                         ),
                       ),
                     ],
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.textMuted, size: 22),
+              const Icon(Icons.chevron_right,
+                  color: AppColors.textMuted, size: 22),
             ],
           ),
         ),

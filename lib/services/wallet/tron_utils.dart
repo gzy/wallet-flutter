@@ -19,7 +19,8 @@ Uint8List _b58Decode(String s) {
     final ch = String.fromCharCode(rune);
     final p = _b58Alphabet.indexOf(ch);
     if (p < 0) {
-      throw const FormatException('invalid base58 character');
+      // 对于用户输入校验场景，不抛异常，直接让上层判定为“地址无效”。
+      return Uint8List(0);
     }
     num = num * BigInt.from(58) + BigInt.from(p);
   }
@@ -112,4 +113,3 @@ Uint8List tronHexToBytes(String hex) {
   if (s.isEmpty) return Uint8List(0);
   return hexToBytes(s.startsWith('0x') ? s.substring(2) : s);
 }
-

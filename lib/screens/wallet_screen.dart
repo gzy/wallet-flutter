@@ -69,7 +69,8 @@ class _WalletScreenState extends State<WalletScreen> {
         onOpenWalletDetails: (w) {
           Navigator.of(sheetContext).pop();
           nav.push<void>(
-            MaterialPageRoute<void>(builder: (_) => WalletDetailScreen(wallet: w)),
+            MaterialPageRoute<void>(
+                builder: (_) => WalletDetailScreen(wallet: w)),
           );
         },
       ),
@@ -101,8 +102,8 @@ class _WalletScreenState extends State<WalletScreen> {
                 (c.network?.toLowerCase().contains(q) == true))
             .toList();
 
-    final totalBalance = coinsOnNetwork.fold<double>(
-        0, (sum, coin) => sum + coin.balanceUSD);
+    final totalBalance =
+        coinsOnNetwork.fold<double>(0, (sum, coin) => sum + coin.balanceUSD);
 
     return SafeArea(
       child: Scaffold(
@@ -156,7 +157,8 @@ class _WalletScreenState extends State<WalletScreen> {
                                   onTransfer: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
-                                          builder: (_) => const TransferScreen()),
+                                          builder: (_) =>
+                                              const TransferScreen()),
                                     );
                                   },
                                   onReceive: () {
@@ -174,8 +176,7 @@ class _WalletScreenState extends State<WalletScreen> {
                                   },
                                   onGas: () {
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('加油站功能开发中')),
+                                      const SnackBar(content: Text('加油站功能开发中')),
                                     );
                                   },
                                   onMore: () {
@@ -187,14 +188,18 @@ class _WalletScreenState extends State<WalletScreen> {
                                 ),
                               ),
                               SliverToBoxAdapter(
-                                child: WalletSearchBar(controller: _searchController),
+                                child: WalletSearchBar(
+                                    controller: _searchController),
                               ),
-                              const SliverToBoxAdapter(child: SizedBox(height: 6)),
+                              const SliverToBoxAdapter(
+                                  child: SizedBox(height: 6)),
                               WalletCoinList(coins: filteredCoins),
                             ],
                           ),
                         ),
-                        if (wallet.hasWallet && wallet.loading && coins.isNotEmpty)
+                        if (wallet.hasWallet &&
+                            wallet.loading &&
+                            coins.isNotEmpty)
                           const Positioned(
                             top: 0,
                             left: 0,
@@ -243,7 +248,8 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
   @override
   void initState() {
     super.initState();
-    _controller.addListener(() => setState(() => _q = _controller.text.trim().toLowerCase()));
+    _controller.addListener(
+        () => setState(() => _q = _controller.text.trim().toLowerCase()));
   }
 
   @override
@@ -256,12 +262,15 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
   Widget build(BuildContext context) {
     final items = _q.isEmpty
         ? widget.wallets
-        : widget.wallets.where((w) => w.name.toLowerCase().contains(_q)).toList();
+        : widget.wallets
+            .where((w) => w.name.toLowerCase().contains(_q))
+            .toList();
 
     return SafeArea(
       top: false,
       child: Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
         child: Container(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
           decoration: const BoxDecoration(
@@ -282,10 +291,12 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                         context: context,
                         builder: (ctx) => AlertDialog(
                           backgroundColor: AppColors.surface,
-                          title: const Text('重命名钱包', style: TextStyle(color: AppColors.textPrimary)),
+                          title: const Text('重命名钱包',
+                              style: TextStyle(color: AppColors.textPrimary)),
                           content: TextField(
                             controller: ctrl,
-                            style: const TextStyle(color: AppColors.textPrimary),
+                            style:
+                                const TextStyle(color: AppColors.textPrimary),
                             decoration: const InputDecoration(
                               hintText: '名称',
                               hintStyle: TextStyle(color: AppColors.textMuted),
@@ -297,7 +308,8 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                               child: const Text('取消'),
                             ),
                             TextButton(
-                              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+                              onPressed: () =>
+                                  Navigator.pop(ctx, ctrl.text.trim()),
                               child: const Text('保存'),
                             ),
                           ],
@@ -323,7 +335,8 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                   ),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                   ),
                 ],
               ),
@@ -337,12 +350,14 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.search, color: AppColors.textMuted, size: 20),
+                    const Icon(Icons.search,
+                        color: AppColors.textMuted, size: 20),
                     const SizedBox(width: 10),
                     Expanded(
                       child: TextField(
                         controller: _controller,
-                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                        style: const TextStyle(
+                            color: AppColors.textPrimary, fontSize: 14),
                         decoration: const InputDecoration(
                           hintText: '搜索',
                           hintStyle: TextStyle(color: AppColors.textMuted),
@@ -358,7 +373,9 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   '软件钱包',
-                  style: TextStyle(color: AppColors.textSecondary.withOpacity(0.9), fontSize: 12),
+                  style: TextStyle(
+                      color: AppColors.textSecondary.withOpacity(0.9),
+                      fontSize: 12),
                 ),
               ),
               const SizedBox(height: 10),
@@ -368,144 +385,185 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                         padding: EdgeInsets.symmetric(vertical: 24),
                         child: Text(
                           '暂无钱包，点击下方添加',
-                          style: TextStyle(color: AppColors.textMuted, fontSize: 14),
+                          style: TextStyle(
+                              color: AppColors.textMuted, fontSize: 14),
                         ),
                       )
                     : SingleChildScrollView(
-                  child: Column(
-                    children: items.map((w) {
-                      final selected = w.id == widget.selectedId;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
-                          decoration: BoxDecoration(
-                            color: AppColors.background,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(14),
-                                  onTap: () {
-                                    widget.onSelect(w.id);
-                                    Navigator.of(context).pop();
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
-                                    child: Row(
-                                      children: [
-                                        Container(
-                                          width: 44,
-                                          height: 44,
-                                          decoration: BoxDecoration(
-                                            color: AppColors.surfaceElevated,
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: Center(
-                                            child: Container(
-                                              width: 22,
-                                              height: 22,
-                                              decoration: BoxDecoration(
-                                                border: Border.all(color: AppColors.textMuted, width: 2),
-                                                borderRadius: BorderRadius.circular(5),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Column(
+                          children: items.map((w) {
+                            final selected = w.id == widget.selectedId;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Container(
+                                padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.background,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(14),
+                                        onTap: () {
+                                          widget.onSelect(w.id);
+                                          Navigator.of(context).pop();
+                                        },
+                                        child: Padding(
+                                          padding: const EdgeInsets.fromLTRB(
+                                              4, 8, 8, 8),
+                                          child: Row(
                                             children: [
-                                              Row(
-                                                children: [
-                                                  Flexible(
-                                                    child: Text(
-                                                      w.name,
-                                                      style: const TextStyle(
-                                                        color: AppColors.textPrimary,
-                                                        fontSize: 14,
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
+                                              Container(
+                                                width: 44,
+                                                height: 44,
+                                                decoration: BoxDecoration(
+                                                  color:
+                                                      AppColors.surfaceElevated,
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                ),
+                                                child: Center(
+                                                  child: Container(
+                                                    width: 22,
+                                                    height: 22,
+                                                    decoration: BoxDecoration(
+                                                      border: Border.all(
+                                                          color: AppColors
+                                                              .textMuted,
+                                                          width: 2),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              5),
                                                     ),
                                                   ),
-                                                  if (!w.backedUp) ...[
-                                                    const SizedBox(width: 8),
-                                                    Container(
-                                                      width: 8,
-                                                      height: 8,
-                                                      decoration: const BoxDecoration(
-                                                        color: Colors.red,
-                                                        shape: BoxShape.circle,
-                                                      ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        Flexible(
+                                                          child: Text(
+                                                            w.name,
+                                                            style:
+                                                                const TextStyle(
+                                                              color: AppColors
+                                                                  .textPrimary,
+                                                              fontSize: 14,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                            maxLines: 1,
+                                                            overflow:
+                                                                TextOverflow
+                                                                    .ellipsis,
+                                                          ),
+                                                        ),
+                                                        if (!w.backedUp) ...[
+                                                          const SizedBox(
+                                                              width: 8),
+                                                          Container(
+                                                            width: 8,
+                                                            height: 8,
+                                                            decoration:
+                                                                const BoxDecoration(
+                                                              color: Colors.red,
+                                                              shape: BoxShape
+                                                                  .circle,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Row(
+                                                      children: [
+                                                        Container(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal: 8,
+                                                                  vertical: 3),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: AppColors
+                                                                .surfaceElevated,
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8),
+                                                          ),
+                                                          child: const Text(
+                                                            '助记词',
+                                                            style: TextStyle(
+                                                              color: AppColors
+                                                                  .textSecondary,
+                                                              fontSize: 11,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                        const SizedBox(
+                                                            width: 8),
+                                                        const Text(
+                                                          'EVM / TRON',
+                                                          style: TextStyle(
+                                                            color: AppColors
+                                                                .textMuted,
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      ],
                                                     ),
                                                   ],
-                                                ],
+                                                ),
                                               ),
-                                              const SizedBox(height: 6),
-                                              Row(
-                                                children: [
-                                                  Container(
-                                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                    decoration: BoxDecoration(
-                                                      color: AppColors.surfaceElevated,
-                                                      borderRadius: BorderRadius.circular(8),
+                                              if (selected)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          right: 4),
+                                                  child: Container(
+                                                    width: 26,
+                                                    height: 26,
+                                                    decoration:
+                                                        const BoxDecoration(
+                                                      color: AppColors.success,
+                                                      shape: BoxShape.circle,
                                                     ),
-                                                    child: const Text(
-                                                      '助记词',
-                                                      style: TextStyle(
-                                                        color: AppColors.textSecondary,
-                                                        fontSize: 11,
-                                                        fontWeight: FontWeight.w500,
-                                                      ),
-                                                    ),
+                                                    child: const Icon(
+                                                        Icons.check,
+                                                        size: 16,
+                                                        color: Colors.white),
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                  const Text(
-                                                    'EVM',
-                                                    style: TextStyle(
-                                                      color: AppColors.textMuted,
-                                                      fontSize: 12,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
+                                                ),
                                             ],
                                           ),
                                         ),
-                                        if (selected)
-                                          Padding(
-                                            padding: const EdgeInsets.only(right: 4),
-                                            child: Container(
-                                              width: 26,
-                                              height: 26,
-                                              decoration: const BoxDecoration(
-                                                color: AppColors.success,
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: const Icon(Icons.check, size: 16, color: Colors.white),
-                                            ),
-                                          ),
-                                      ],
+                                      ),
                                     ),
-                                  ),
+                                    IconButton(
+                                      onPressed: () =>
+                                          widget.onOpenWalletDetails(w),
+                                      icon: const Icon(Icons.more_vert,
+                                          color: AppColors.textSecondary),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              IconButton(
-                                onPressed: () => widget.onOpenWalletDetails(w),
-                                icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
-                              ),
-                            ],
-                          ),
+                            );
+                          }).toList(),
                         ),
-                      );
-                    }).toList(),
-                  ),
-                ),
+                      ),
               ),
               const SizedBox(height: 10),
               SizedBox(
@@ -516,8 +574,10 @@ class _WalletManagerSheetState extends State<_WalletManagerSheet> {
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.accent,
                     foregroundColor: AppColors.accentText,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    textStyle: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700),
                   ),
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,

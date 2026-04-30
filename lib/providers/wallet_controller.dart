@@ -58,6 +58,7 @@ class WalletController extends ChangeNotifier {
   String? _tronAddress;
   bool _backedUp = false;
   bool _loading = false;
+
   /// 首页网络筛选：后端钱包接口使用的 `chain` 查询参数（优先 chainCode，缺失则 chainId 字符串）。
   /// `null` 表示“全部网络”。
   String? _sendChain;
@@ -223,7 +224,8 @@ class WalletController extends ChangeNotifier {
   }
 
   /// 地址簿「最近」：与当前链 `chain` 查询参数一致时展示（见 [chainParamForCoin]）。
-  Future<List<RecentRecipient>> recentRecipientsForChain(String chainQuery) async {
+  Future<List<RecentRecipient>> recentRecipientsForChain(
+      String chainQuery) async {
     final id = _activeWalletId;
     if (id == null) {
       return const [];
@@ -332,7 +334,8 @@ class WalletController extends ChangeNotifier {
         await _storage.setActiveWalletId(_activeWalletId!);
       }
       if (_activeWalletId != null) {
-        _hiddenCoinIds = await _storage.readHiddenCoinIdsForWallet(_activeWalletId!);
+        _hiddenCoinIds =
+            await _storage.readHiddenCoinIdsForWallet(_activeWalletId!);
       } else {
         _hiddenCoinIds = <String>{};
       }
@@ -653,6 +656,23 @@ class WalletController extends ChangeNotifier {
       return HdWalletService.privateKeyFromMnemonic(m).address.hex;
     } catch (e, st) {
       debugPrint('readAddressHexForWallet: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 根据助记词推导该钱包的 Tron 地址（Base58Check，T...），不切换当前钱包。
+  Future<String?> readTronAddressForWallet(String walletId) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      final pk = Uint8List.fromList(
+        HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
+      );
+      return tronAddressFromPrivateKeyBytes(pk);
+    } catch (e, st) {
+      debugPrint('readTronAddressForWallet: $e\n$st');
       return null;
     }
   }

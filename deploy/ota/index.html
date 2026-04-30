@@ -253,13 +253,13 @@
 		<div class="card">
 			<div class="ver">
 				<span class="ver-tag" id="plat-tag">—</span>
-				<span>版本 <strong id="v-name">1.0.0</strong> · 构建 <strong id="v-build">1</strong></span>
+				<span>版本 <strong id="v-name">—</strong> · 构建 <strong id="v-build">—</strong></span>
 			</div>
 			<a id="install" class="btn-primary" href="#">主操作</a>
 			<a id="install-alt" class="btn-secondary hidden" href="#">其他系统</a>
 			<div class="hint" id="hint"></div>
 			<div class="meta">
-				当前资源基址：<code id="base-url-meta"></code>（站点下的子目录）。请把 <code>index.html</code>、<code>manifest.plist</code>、<code>WalletFlutter.ipa</code>、<code id="apk-name-meta"></code> 上传到该路径；发新版时同步改版本号与 <code>manifest.plist</code> 内 <code>bundle-version</code>。
+				当前资源基址：<code id="base-url-meta"></code>（站点下的子目录）。请把 <code>index.html</code>、<code>manifest.plist</code>、<code>WalletFlutter.ipa</code>、<code id="apk-name-meta"></code> 上传到该路径；发新版时建议用脚本从 <code>pubspec.yaml</code> 同步版本号与 <code>manifest.plist</code> 内 <code>bundle-version</code>。
 			</div>
 		</div>
 
@@ -272,6 +272,9 @@
 			/** 站点上的子目录名，不要首尾斜杠；根目录部署则填 "" */
 			var OTA_SUBDIR = "wallet-flutter";
 			var ANDROID_APK = "app-release.apk";
+			/** 展示用版本号（建议用 tools/sync_ota_version.dart 从 pubspec.yaml 同步） */
+			$11.0.0$2
+			$11$2
 
 			function normBase(b) {
 				return b.replace(/\/+$/, "");
@@ -307,9 +310,13 @@
 			var sub = document.getElementById("sub");
 			var badge = document.getElementById("badge");
 			var platTag = document.getElementById("plat-tag");
+			var vName = document.getElementById("v-name");
+			var vBuild = document.getElementById("v-build");
 			var a = document.getElementById("install");
 			var alt = document.getElementById("install-alt");
 			var hint = document.getElementById("hint");
+			if (vName) vName.textContent = APP_VERSION_NAME;
+			if (vBuild) vBuild.textContent = APP_BUILD_NUMBER;
 
 			if (d.iOS) {
 				badge.textContent = "TestFlight / Ad Hoc";

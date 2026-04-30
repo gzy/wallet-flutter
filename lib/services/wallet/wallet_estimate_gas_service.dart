@@ -14,10 +14,13 @@ class WalletEstimateGasService {
   final http.Client _httpClient;
 
   static http.Client _defaultClient() {
-    return HttpClients.create(logName: 'WalletEstimateGas', maxLogBodyLength: 20000);
+    return HttpClients.create(
+        logName: 'WalletEstimateGas', maxLogBodyLength: 20000);
   }
 
   static Uri _uri() => Uri.parse('$kMarketApiBase/api/app/wallet/estimateGas');
+  static Uri _uriV2() =>
+      Uri.parse('$kMarketApiBase/api/app/wallet/estimateGasV2');
 
   /// `code==0` 时返回 [data]（一般为 Map，含 `gasLimit`），否则 `null`。
   Future<Object?> estimateGas({
@@ -65,6 +68,86 @@ class WalletEstimateGasService {
       debugPrint('WalletEstimateGasService.estimateGas: $e\n$st');
       return null;
     }
+  }
+
+  /// 后端 `POST /api/app/wallet/estimateGasV2`：参数与旧版一致，EVM 取 `data.gasLimit`。
+  ///
+  /// `code==0` 时返回 [data]（一般为 Map，含 `gasLimit`），否则 `null`。
+  Future<Object?> estimateGasV2({
+    required String chain,
+    required String coin,
+    required String ownerAddress,
+    required String toAddress,
+    required num amount,
+  }) async {
+    try {
+      final payload = <String, dynamic>{
+        'chain': chain,
+        'coin': coin,
+        'ownerAddress': ownerAddress,
+        'toAddress': toAddress,
+        'amount': amount,
+      };
+      final res = await _httpClient
+          .post(
+            _uriV2(),
+            headers: const {
+              'Accept': '*/*',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        if (kDebugMode) {
+          debugPrint('WalletEstimateGasService(V2): HTTP ${res.statusCode}');
+        }
+        return null;
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is! Map<String, dynamic> || decoded['code'] != 0) {
+        if (kDebugMode) {
+          debugPrint(
+            'WalletEstimateGasService(V2): code=${decoded is Map ? decoded['code'] : 'n/a'}',
+          );
+        }
+        return null;
+      }
+      return decoded['data'];
+    } catch (e, st) {
+      debugPrint('WalletEstimateGasService.estimateGasV2: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 优先使用 V2；若 V2 无法解析出 gasLimit，则回退旧版。
+  ///
+  /// 返回值与 [estimateGas]/[estimateGasV2] 一致：成功时返回 `data`，否则 `null`。
+  Future<Object?> estimateGasPreferV2({
+    required String chain,
+    required String coin,
+    required String ownerAddress,
+    required String toAddress,
+    required num amount,
+    bool requireGasLimit = true,
+  }) async {
+    final v2 = await estimateGasV2(
+      chain: chain,
+      coin: coin,
+      ownerAddress: ownerAddress,
+      toAddress: toAddress,
+      amount: amount,
+    );
+    if (v2 != null && (!requireGasLimit || parseGasLimit(v2) != null)) {
+      return v2;
+    }
+    return estimateGas(
+      chain: chain,
+      coin: coin,
+      ownerAddress: ownerAddress,
+      toAddress: toAddress,
+      amount: amount,
+    );
   }
 
   static int? parseGasLimit(Object? data) {

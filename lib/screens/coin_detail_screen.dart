@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/chain_transaction_vo.dart';
 import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
+import '../services/wallet/chain_rules.dart';
 import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
 import 'flash_screen.dart';
@@ -42,8 +43,8 @@ String _formatTxHistoryDate(DateTime t) {
   return '${x.year}-${two(x.month)}-${two(x.day)}';
 }
 
-String _midTruncAddrForTxList(String raw) {
-  final a = raw.trim().startsWith('0x') ? raw.trim() : '0x${raw.trim()}';
+String _midTruncAddrForTxList(String raw, ChainKind kind) {
+  final a = _txAddrUi(raw, kind);
   if (a.length <= 22) {
     return a;
   }
@@ -75,14 +76,15 @@ String _coinNetworkSubtitle(CoinData live) {
   if (c != null) {
     return 'Chain $c';
   }
-  return 'EVM';
+  final kind = ChainRules.kindFromChainQuery(live.walletApiChainQuery);
+  return kind == ChainKind.tron ? 'TRON' : 'EVM';
 }
 
-String _txHistorySubtitleFromTo(bool outgoing, String counter) {
+String _txHistorySubtitleFromTo(bool outgoing, String counter, ChainKind kind) {
   if (counter.isEmpty) {
     return '合约创建';
   }
-  final body = _midTruncAddrForTxList(counter);
+  final body = _midTruncAddrForTxList(counter, kind);
   return outgoing ? 'To: $body' : 'From: $body';
 }
 
@@ -112,16 +114,17 @@ enum _TxChipFilter {
   gasOnly,
 }
 
-String _normAddrForTx(String raw) {
-  final s = raw.trim().toLowerCase();
-  if (s.isEmpty) {
-    return '';
-  }
-  return s.startsWith('0x') ? s : '0x$s';
+String _txAddrKey(String raw, ChainKind kind) {
+  return ChainRules.normalizeAddressForStorage(kind, raw);
+}
+
+String _txAddrUi(String raw, ChainKind kind) {
+  return ChainRules.formatAddressForUi(kind, raw);
 }
 
 /// 与后端 `fundDirection`（in/out）或 from 地址推断一致。
-bool _apiTxIsOutgoing(ChainTransactionVo tx, String walletHex) {
+bool _apiTxIsOutgoing(
+    ChainTransactionVo tx, String walletAddress, ChainKind kind) {
   final fd = tx.fundDirection?.toLowerCase().trim();
   if (fd == 'out' || fd == 'send' || fd == 'outgoing') {
     return true;
@@ -129,24 +132,25 @@ bool _apiTxIsOutgoing(ChainTransactionVo tx, String walletHex) {
   if (fd == 'in' || fd == 'receive' || fd == 'incoming') {
     return false;
   }
-  final w = _normAddrForTx(walletHex);
+  final w = _txAddrKey(walletAddress, kind);
   final from = tx.fromAddress?.trim() ?? '';
   if (from.isEmpty) {
     return false;
   }
-  return _normAddrForTx(from) == w;
+  return _txAddrKey(from, kind) == w;
 }
 
 List<ChainTransactionVo> _visibleApiTransactions(
   List<ChainTransactionVo> txs,
   _TxChipFilter filter,
-  String walletHex,
+  String walletAddress,
+  ChainKind kind,
 ) {
   if (txs.isEmpty) {
     return txs;
   }
   return txs.where((tx) {
-    final out = _apiTxIsOutgoing(tx, walletHex);
+    final out = _apiTxIsOutgoing(tx, walletAddress, kind);
     final q = tx.quantity ?? 0;
     switch (filter) {
       case _TxChipFilter.all:
@@ -242,18 +246,10 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (chain.isEmpty) {
         throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
       }
-      final chainType = wc.backendChains
-          .firstWhere(
-            (c) => c.walletApiChainQuery == chain,
-            orElse: () => wc.backendChains.first,
-          )
-          .chainType
-          .trim()
-          .toUpperCase();
-      final addr = wc.addressHex ?? '';
-      final address = chainType == 'TRON'
+      final kind = ChainRules.kindFromChainQuery(chain);
+      final address = kind == ChainKind.tron
           ? (wc.tronAddress ?? '')
-          : (addr.startsWith('0x') ? addr : '0x$addr');
+          : ChainRules.formatAddressForUi(ChainKind.evm, wc.addressHex ?? '');
       if (address.isEmpty) {
         throw StateError('缺少地址，无法拉取交易记录');
       }
@@ -323,18 +319,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (cache != null) {
         try {
           final chain2 = wc.chainParamForCoin(live);
-          final chainType2 = wc.backendChains
-              .firstWhere(
-                (c) => c.walletApiChainQuery == chain2,
-                orElse: () => wc.backendChains.first,
-              )
-              .chainType
-              .trim()
-              .toUpperCase();
-          final hex = wc.addressHex ?? '';
-          final ad = chainType2 == 'TRON'
+          final kind2 = ChainRules.kindFromChainQuery(chain2);
+          final ad = kind2 == ChainKind.tron
               ? (wc.tronAddress ?? '')
-              : (hex.startsWith('0x') ? hex : '0x$hex');
+              : ChainRules.formatAddressForUi(
+                  ChainKind.evm, wc.addressHex ?? '');
           final sc = cache.transactionScopeKey(ad, chain2, live.symbol);
           final fromDisk = await cache.getTransactionHistory(sc);
           if (fromDisk != null) {
@@ -365,7 +354,14 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   }
 
   Future<void> _openExplorerTxForCoin(CoinData live, String rawHash) async {
-    final h = rawHash.trim().startsWith('0x') ? rawHash.trim() : '0x${rawHash.trim()}';
+    final wc = context.read<WalletController>();
+    final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final h = kind == ChainKind.tron
+        ? rawHash.trim()
+        : (rawHash.trim().startsWith('0x')
+            ? rawHash.trim()
+            : '0x${rawHash.trim()}');
     final link = _joinExplorerUrl(live.txUrlPrefix, h);
     if (link == null) {
       return;
@@ -375,8 +371,12 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     } catch (_) {}
   }
 
-  Future<void> _openExplorerAddressForCoin(CoinData live, String rawAddr) async {
-    final a = rawAddr.trim().startsWith('0x') ? rawAddr.trim() : '0x${rawAddr.trim()}';
+  Future<void> _openExplorerAddressForCoin(
+      CoinData live, String rawAddr) async {
+    final wc = context.read<WalletController>();
+    final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final a = ChainRules.formatAddressForUi(kind, rawAddr);
     final link = _joinExplorerUrl(live.addressUrlPrefix, a);
     if (link == null) {
       return;
@@ -393,11 +393,13 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     bool useApiList,
     List<ChainTransactionVo> apiVisible,
   ) async {
-    final hex = wc.addressHex;
-    if (hex == null) {
+    final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
+    if (walletAddr == null) {
       return;
     }
-    final normalized = hex.startsWith('0x') ? hex : '0x$hex';
+    final normalized = ChainRules.formatAddressForUi(kind, walletAddr);
     if (useApiList && apiVisible.isNotEmpty) {
       final p = apiVisible.first.addressLinkPrefix?.trim();
       if (p != null && p.isNotEmpty) {
@@ -433,8 +435,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         child: CircularProgressIndicator(color: AppColors.accent),
       ),
     );
-    final h = rawTxHash.startsWith('0x') ? rawTxHash : '0x$rawTxHash';
     final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final h = kind == ChainKind.tron
+        ? rawTxHash
+        : (rawTxHash.startsWith('0x') ? rawTxHash : '0x$rawTxHash');
     final detail = await _txDetailService.fetchTransactionDetail(
       txHash: h,
       chain: chain,
@@ -457,13 +462,16 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     String rawTxHash,
     ChainTransactionVo detail,
   ) {
+    final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => WalletTransactionDetailScreen(
           detail: detail,
           coin: live,
           rawTxHash: rawTxHash,
-          walletHex: wc.addressHex,
+          walletHex: walletAddr,
         ),
       ),
     );
@@ -486,11 +494,13 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     final live = _liveCoin(wc, widget.coin);
     final hasChain = wc.chainParamForCoin(live).trim().isNotEmpty;
     final subtitle = _walletAddressSubtitle(wc);
-    final walletHex = wc.addressHex;
+    final chain = wc.chainParamForCoin(live);
+    final kind = ChainRules.kindFromChainQuery(chain);
+    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
     final useApiList = _txsFromApi != null;
-    final visibleTxsApi = (walletHex == null || !useApiList)
+    final visibleTxsApi = (walletAddr == null || !useApiList)
         ? const <ChainTransactionVo>[]
-        : _visibleApiTransactions(_txsFromApi!, _txFilter, walletHex);
+        : _visibleApiTransactions(_txsFromApi!, _txFilter, walletAddr, kind);
     final filterEmpty = useApiList ? visibleTxsApi.isEmpty : true;
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -505,13 +515,12 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
             onPressed: () {},
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-            icon: const Icon(Icons.tune,
-                color: AppColors.textPrimary, size: 22),
+            icon:
+                const Icon(Icons.tune, color: AppColors.textPrimary, size: 22),
           ),
           const SizedBox(width: 4),
           IconButton(
-            onPressed:
-                !hasChain ? null : () => _showMoreSheet(live: live),
+            onPressed: !hasChain ? null : () => _showMoreSheet(live: live),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             icon: const Icon(Icons.more_vert,
@@ -698,8 +707,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                         ),
                                         const SizedBox(height: 6),
                                         AnimatedContainer(
-                                          duration: const Duration(
-                                              milliseconds: 200),
+                                          duration:
+                                              const Duration(milliseconds: 200),
                                           height: 3,
                                           width:
                                               _txShowTransactionsTab ? 36 : 0,
@@ -736,12 +745,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                         ),
                                         const SizedBox(height: 6),
                                         AnimatedContainer(
-                                          duration: const Duration(
-                                              milliseconds: 200),
+                                          duration:
+                                              const Duration(milliseconds: 200),
                                           height: 3,
-                                          width: !_txShowTransactionsTab
-                                              ? 36
-                                              : 0,
+                                          width:
+                                              !_txShowTransactionsTab ? 36 : 0,
                                           decoration: BoxDecoration(
                                             color: !_txShowTransactionsTab
                                                 ? AppColors.accent
@@ -771,8 +779,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                       const SizedBox(width: 8),
                                       _TagChip(
                                         label: '收款',
-                                        selected: _txFilter ==
-                                            _TxChipFilter.receive,
+                                        selected:
+                                            _txFilter == _TxChipFilter.receive,
                                         onTap: () => setState(() =>
                                             _txFilter = _TxChipFilter.receive),
                                       ),
@@ -787,16 +795,16 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                       const SizedBox(width: 8),
                                       _TagChip(
                                         label: '待确认',
-                                        selected: _txFilter ==
-                                            _TxChipFilter.pending,
+                                        selected:
+                                            _txFilter == _TxChipFilter.pending,
                                         onTap: () => setState(() =>
                                             _txFilter = _TxChipFilter.pending),
                                       ),
                                       const SizedBox(width: 8),
                                       _TagChip(
                                         label: '矿工费',
-                                        selected: _txFilter ==
-                                            _TxChipFilter.gasOnly,
+                                        selected:
+                                            _txFilter == _TxChipFilter.gasOnly,
                                         onTap: () => setState(() =>
                                             _txFilter = _TxChipFilter.gasOnly),
                                       ),
@@ -897,7 +905,9 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                 !hasChain
                                     ? '缺少链信息，无法展示交易记录'
                                     : (live.addressUrlPrefix == null ||
-                                            live.addressUrlPrefix!.trim().isEmpty)
+                                            live.addressUrlPrefix!
+                                                .trim()
+                                                .isEmpty)
                                         ? '暂无记录'
                                         : '暂无记录',
                                 textAlign: TextAlign.center,
@@ -959,16 +969,16 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         delegate: SliverChildBuilderDelegate(
                           (context, index) {
                             final tx = visibleTxsApi[index];
-                            final addr = wc.addressHex;
+                            final addr = walletAddr;
                             if (addr == null) {
                               return const SizedBox.shrink();
                             }
-                            final outgoing = _apiTxIsOutgoing(tx, addr);
+                            final outgoing = _apiTxIsOutgoing(tx, addr, kind);
                             final counter = outgoing
                                 ? (tx.toAddress ?? '').trim()
                                 : (tx.fromAddress ?? '').trim();
-                            final subtitle =
-                                _txHistorySubtitleFromTo(outgoing, counter);
+                            final subtitle = _txHistorySubtitleFromTo(
+                                outgoing, counter, kind);
                             final amt = _formatApiQuantity(tx.quantity);
                             final sign = outgoing ? '-' : '+';
                             final hash = tx.txHash ?? '';
@@ -1100,7 +1110,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         final chain = wc.chainParamForCoin(widget.coin);
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                              builder: (_) => ReceiveScreen(initialChain: chain)),
+                              builder: (_) =>
+                                  ReceiveScreen(initialChain: chain)),
                         );
                       },
                       style: OutlinedButton.styleFrom(
@@ -1143,7 +1154,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                             final chain = wc.chainParamForCoin(widget.coin);
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                  builder: (_) => TransferScreen(initialChain: chain)),
+                                  builder: (_) =>
+                                      TransferScreen(initialChain: chain)),
                             );
                           },
                           child: const Center(
@@ -1511,7 +1523,7 @@ class _CoinDetailStickyTxHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(
-    BuildContext context, double shrinkOffset, bool overlapsContent) {
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Material(
       color: AppColors.background,
       surfaceTintColor: Colors.transparent,
