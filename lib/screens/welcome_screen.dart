@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'add_wallet_screen.dart';
 import 'import_wallet_screen.dart';
@@ -10,7 +11,8 @@ import 'import_wallet_screen.dart';
 ///
 /// 字体：设计稿为 Alibaba PuHuiTi 3.0；未内置字体文件时由系统回退，将 `.ttf` 加入 `pubspec.yaml` 的 `fonts` 后即可生效。
 class WelcomeScreen extends StatefulWidget {
-  const WelcomeScreen({super.key});
+  final bool allowActions;
+  const WelcomeScreen({super.key, this.allowActions = true});
 
   /// 与 Figma 一致的 family 名；注册字体后生效。
   static const String buttonFontFamily = 'Alibaba PuHuiTi 3.0';
@@ -33,17 +35,33 @@ class WelcomeScreen extends StatefulWidget {
 }
 
 class _WelcomeScreenState extends State<WelcomeScreen> {
-  static const _revealDelay = Duration(milliseconds: 720);
+  static const _revealDelay = Duration(seconds: 2);
   bool _showActions = false;
   Timer? _revealTimer;
+  String? _versionLabel;
 
   @override
   void initState() {
     super.initState();
-    _revealTimer = Timer(_revealDelay, () {
+    unawaited(_loadVersionLabel());
+    if (widget.allowActions) {
+      _revealTimer = Timer(_revealDelay, () {
+        if (!mounted) return;
+        setState(() => _showActions = true);
+      });
+    }
+  }
+
+  Future<void> _loadVersionLabel() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      final v = info.version.trim();
+      final b = info.buildNumber.trim();
       if (!mounted) return;
-      setState(() => _showActions = true);
-    });
+      setState(() => _versionLabel = b.isEmpty ? 'v$v' : 'v$v ($b)');
+    } catch (_) {
+      // ignore: best-effort UI
+    }
   }
 
   @override
@@ -89,48 +107,64 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                 ),
               ),
             ),
-            Positioned(
-              left: 24,
-              right: 24,
-              bottom: 24 + bottomInset,
-              child: AnimatedOpacity(
-                opacity: _showActions ? 1 : 0,
-                duration: const Duration(milliseconds: 420),
-                curve: Curves.easeOutCubic,
-                child: IgnorePointer(
-                  ignoring: !_showActions,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _WelcomePrimaryButton(
-                        label: 'Create Wallet',
-                        onPressed: () {
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const AddWalletScreen(
-                                openCreateDialogOnOpen: true,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      _WelcomeSecondaryButton(
-                        label: 'Import Wallet',
-                        onPressed: () {
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const ImportWalletScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ],
+            if (_versionLabel != null)
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: 24 + bottomInset + (_showActions ? 116 : 0),
+                child: Text(
+                  _versionLabel!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFB8BCC5),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
-            ),
+            if (widget.allowActions)
+              Positioned(
+                left: 24,
+                right: 24,
+                bottom: 24 + bottomInset,
+                child: AnimatedOpacity(
+                  opacity: _showActions ? 1 : 0,
+                  duration: const Duration(milliseconds: 420),
+                  curve: Curves.easeOutCubic,
+                  child: IgnorePointer(
+                    ignoring: !_showActions,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _WelcomePrimaryButton(
+                          label: 'Create Wallet',
+                          onPressed: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const AddWalletScreen(
+                                  openCreateDialogOnOpen: true,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _WelcomeSecondaryButton(
+                          label: 'Import Wallet',
+                          onPressed: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const ImportWalletScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

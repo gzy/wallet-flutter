@@ -81,14 +81,17 @@ void main(List<String> args) {
 String _updateIndexHtml(String input,
     {required String name, required String build}) {
   var out = input;
-  out = out.replaceFirst(
+
+  out = out.replaceFirstMapped(
     RegExp(r'(\bvar\s+APP_VERSION_NAME\s*=\s*")[^"]*(";)'),
-    r'$1' + name + r'$2',
+    (m) => '${m.group(1)}$name${m.group(2)}',
   );
-  out = out.replaceFirst(
+
+  out = out.replaceFirstMapped(
     RegExp(r'(\bvar\s+APP_BUILD_NUMBER\s*=\s*")[^"]*(";)'),
-    r'$1' + build + r'$2',
+    (m) => '${m.group(1)}$build${m.group(2)}',
   );
+
   return out;
 }
 

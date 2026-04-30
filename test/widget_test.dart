@@ -57,6 +57,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // Default state (no wallet yet) should show WelcomeScreen CTA.
+    // WelcomeScreen delays CTA reveal by 2s.
+    await tester.pump(const Duration(seconds: 2));
     expect(find.text('Create Wallet'), findsOneWidget);
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

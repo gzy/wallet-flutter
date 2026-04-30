@@ -121,6 +121,10 @@ class _HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
+  static const Duration _startupWelcomeDuration = Duration(seconds: 2);
+  Timer? _startupWelcomeTimer;
+  bool _forceShowWelcome = true;
+
   @override
   void initState() {
     super.initState();
@@ -129,6 +133,7 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _startupWelcomeTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -159,8 +164,21 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
             ),
           );
         }
-        if (!w.hasWallet || _previewWelcome) {
+        if (_previewWelcome) {
           return const WelcomeScreen();
+        }
+        // 每次冷启动先展示欢迎页 2s；无钱包则一直停留，并展示底部按钮。
+        if (!w.hasWallet) {
+          _startupWelcomeTimer?.cancel();
+          _forceShowWelcome = true;
+          return const WelcomeScreen(allowActions: true);
+        }
+        if (_forceShowWelcome) {
+          _startupWelcomeTimer ??= Timer(_startupWelcomeDuration, () {
+            if (!mounted) return;
+            setState(() => _forceShowWelcome = false);
+          });
+          return const WelcomeScreen(allowActions: false);
         }
         // PIN 未解锁时不挂载 MainTabs（IndexedStack 会同时保持 5 个 Tab 存活并重绘），解锁层由上层 Stack 提供。
         if (w.pinEnabled && !w.sessionUnlocked) {
