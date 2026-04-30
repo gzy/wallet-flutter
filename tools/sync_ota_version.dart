@@ -101,7 +101,10 @@ String _updateManifestPlist(String input, {required String build}) {
     r'(<key>\s*bundle-version\s*</key>\s*<string>)[^<]*(</string>)',
     multiLine: true,
   );
-  return input.replaceFirst(re, r'$1' + build + r'$2');
+  return input.replaceFirstMapped(
+    re,
+    (m) => '${m.group(1)}$build${m.group(2)}',
+  );
 }
 
 bool _isSemverLike(String s) => RegExp(r'^\d+\.\d+\.\d+$').hasMatch(s);
