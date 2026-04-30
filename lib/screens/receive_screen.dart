@@ -8,6 +8,7 @@ import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
 import '../services/wallet/chain_rules.dart';
 import '../theme/app_colors.dart';
+import '../widgets/coin_icon.dart';
 
 class ReceiveScreen extends StatefulWidget {
   const ReceiveScreen({super.key, this.initialChain});
@@ -277,19 +278,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                                     Positioned(
                                       left: 0,
                                       top: 0,
-                                      child: CircleAvatar(
-                                        radius: 22,
-                                        backgroundColor: token.color,
-                                        child: Text(
-                                          token.symbol.isNotEmpty
-                                              ? token.symbol[0]
-                                              : '?',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 18,
-                                          ),
-                                        ),
+                                      child: CoinIcon(
+                                        symbol: token.symbol,
+                                        size: 44,
                                       ),
                                     ),
                                     Positioned(
@@ -661,18 +652,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 4),
                             onTap: () => Navigator.pop(context, t.chain),
-                            leading: CircleAvatar(
-                              radius: 20,
-                              backgroundColor: t.color,
-                              child: Text(
-                                t.symbol.substring(0, 1),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w500,
-                                  fontSize: 15,
-                                ),
-                              ),
-                            ),
+                            leading: CoinIcon(symbol: t.symbol, size: 40),
                             title: Text(
                               t.symbol,
                               style: const TextStyle(

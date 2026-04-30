@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/wallet_controller.dart';
 import '../theme/app_colors.dart';
+import '../widgets/coin_icon.dart';
 
 class FlashScreen extends StatefulWidget {
   const FlashScreen({super.key});
@@ -43,7 +44,8 @@ class _FlashScreenState extends State<FlashScreen> {
               const SizedBox(height: 12),
               const Align(
                 alignment: Alignment.centerRight,
-                child: Icon(Icons.history, color: AppColors.textSecondary, size: 22),
+                child: Icon(Icons.history,
+                    color: AppColors.textSecondary, size: 22),
               ),
               const SizedBox(height: 10),
               _swapPanel(),
@@ -55,7 +57,8 @@ class _FlashScreenState extends State<FlashScreen> {
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.surfaceElevated,
                     foregroundColor: AppColors.textPrimary,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                   child: const Padding(
                     padding: EdgeInsets.symmetric(vertical: 14),
@@ -68,7 +71,8 @@ class _FlashScreenState extends State<FlashScreen> {
               const SizedBox(height: 14),
               TextButton(
                 onPressed: () {},
-                child: const Text('展示更多⌄', style: TextStyle(color: AppColors.textSecondary)),
+                child: const Text('展示更多⌄',
+                    style: TextStyle(color: AppColors.textSecondary)),
               ),
               const SizedBox(height: 8),
               Container(
@@ -81,12 +85,14 @@ class _FlashScreenState extends State<FlashScreen> {
                 child: const Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.info_outline, color: AppColors.textSecondary, size: 18),
+                    Icon(Icons.info_outline,
+                        color: AppColors.textSecondary, size: 18),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         '请注意，由于汇率波动，你收到的金额和预估金额可能会存在少许差异。',
-                        style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                        style: TextStyle(
+                            color: AppColors.textSecondary, fontSize: 14),
                       ),
                     ),
                   ],
@@ -123,11 +129,16 @@ class _FlashScreenState extends State<FlashScreen> {
             children: [
               Icon(Icons.more_horiz, size: 18, color: AppColors.textSecondary),
               SizedBox(width: 8),
-              SizedBox(height: 16, child: VerticalDivider(color: AppColors.borderSoft)),
+              SizedBox(
+                  height: 16,
+                  child: VerticalDivider(color: AppColors.borderSoft)),
               SizedBox(width: 8),
-              Icon(Icons.horizontal_rule, size: 18, color: AppColors.textSecondary),
+              Icon(Icons.horizontal_rule,
+                  size: 18, color: AppColors.textSecondary),
               SizedBox(width: 8),
-              SizedBox(height: 16, child: VerticalDivider(color: AppColors.borderSoft)),
+              SizedBox(
+                  height: 16,
+                  child: VerticalDivider(color: AppColors.borderSoft)),
               SizedBox(width: 8),
               Icon(Icons.close, size: 16, color: AppColors.textSecondary),
             ],
@@ -182,7 +193,8 @@ class _FlashScreenState extends State<FlashScreen> {
                 balanceText: '0',
                 amountWidget: const Text(
                   '0',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 30),
+                  style:
+                      TextStyle(color: AppColors.textSecondary, fontSize: 30),
                 ),
                 onPick: () async {
                   final picked = await _openTokenPicker();
@@ -198,7 +210,8 @@ class _FlashScreenState extends State<FlashScreen> {
                   const SizedBox(width: 16),
                   _rateItem('fixed', '固定汇率'),
                   const SizedBox(width: 8),
-                  const Icon(Icons.help_outline, color: AppColors.textSecondary, size: 18),
+                  const Icon(Icons.help_outline,
+                      color: AppColors.textSecondary, size: 18),
                 ],
               ),
             ],
@@ -240,9 +253,11 @@ class _FlashScreenState extends State<FlashScreen> {
           children: [
             Text(title, style: const TextStyle(fontSize: 16)),
             const Spacer(),
-            const Icon(Icons.account_balance_wallet_outlined, size: 15, color: AppColors.textMuted),
+            const Icon(Icons.account_balance_wallet_outlined,
+                size: 15, color: AppColors.textMuted),
             const SizedBox(width: 4),
-            Text(balanceText, style: const TextStyle(color: AppColors.textSecondary)),
+            Text(balanceText,
+                style: const TextStyle(color: AppColors.textSecondary)),
             const SizedBox(width: 4),
             const Text('最大', style: TextStyle(color: AppColors.accent)),
           ],
@@ -254,24 +269,22 @@ class _FlashScreenState extends State<FlashScreen> {
               onTap: onPick,
               child: Row(
                 children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundColor: token.$1 == 'BNB' ? const Color(0xFFF0B90B) : const Color(0xFF3B82F6),
-                    child: Text(
-                      token.$1.substring(0, 1),
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                    ),
-                  ),
+                  CoinIcon(symbol: token.$1, size: 40),
                   const SizedBox(width: 8),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(token.$1, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-                      Text(token.$2, style: const TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                      Text(token.$1,
+                          style: const TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w600)),
+                      Text(token.$2,
+                          style: const TextStyle(
+                              fontSize: 14, color: AppColors.textSecondary)),
                     ],
                   ),
                   const SizedBox(width: 6),
-                  const Icon(Icons.keyboard_arrow_down, color: AppColors.textMuted, size: 18),
+                  const Icon(Icons.keyboard_arrow_down,
+                      color: AppColors.textMuted, size: 18),
                 ],
               ),
             ),
@@ -317,7 +330,8 @@ class _FlashScreenState extends State<FlashScreen> {
               Spacer(),
               Text('🚀 Changelly', style: TextStyle(fontSize: 16)),
               SizedBox(width: 4),
-              Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 18),
+              Icon(Icons.chevron_right,
+                  color: AppColors.textSecondary, size: 18),
             ],
           ),
           SizedBox(height: 10),
@@ -327,7 +341,8 @@ class _FlashScreenState extends State<FlashScreen> {
               Spacer(),
               Text('3%', style: TextStyle(fontSize: 16)),
               SizedBox(width: 4),
-              Icon(Icons.chevron_right, color: AppColors.textSecondary, size: 18),
+              Icon(Icons.chevron_right,
+                  color: AppColors.textSecondary, size: 18),
             ],
           ),
         ],
@@ -377,5 +392,4 @@ class _FlashScreenState extends State<FlashScreen> {
       },
     );
   }
-
 }

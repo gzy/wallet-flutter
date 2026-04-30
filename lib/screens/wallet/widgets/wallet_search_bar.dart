@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../../models/app_chain_config.dart';
 import '../../../providers/wallet_controller.dart';
 import '../../../theme/app_colors.dart';
+import '../../../widgets/chain_icon.dart';
 
 String _networkPillLabel(WalletController wc) {
   final q = wc.sendChain;
@@ -19,6 +20,8 @@ String _networkPillLabel(WalletController wc) {
   return q;
 }
 
+// 兼容：历史版本里网络选择弹窗使用过 `_chainAccentColor/_chainAvatarMark`。
+// 热重载时旧闭包可能仍在调用它们；保留空实现避免 NoSuchMethodError。
 Color _chainAccentColor(int chainId) {
   const colors = <Color>[
     Color(0xFF3B82F6),
@@ -159,9 +162,8 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                     }
 
                     final cfg = options[index - 1];
-                    final type = cfg.chainType.toUpperCase();
-                    final id = int.tryParse(cfg.chainId);
-                    final isEvm = type == 'EVM' && id != null;
+                    final code =
+                        (cfg.chainCode ?? cfg.walletApiChainQuery).trim();
                     final selected = cfg.walletApiChainQuery == current;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
@@ -169,7 +171,8 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                         color: Colors.transparent,
                         child: InkWell(
                           borderRadius: BorderRadius.circular(10),
-                          onTap: () => Navigator.pop(ctx, cfg.walletApiChainQuery),
+                          onTap: () =>
+                              Navigator.pop(ctx, cfg.walletApiChainQuery),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -187,20 +190,7 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                             ),
                             child: Row(
                               children: [
-                                CircleAvatar(
-                                  radius: 21,
-                                  backgroundColor: isEvm
-                                      ? _chainAccentColor(id)
-                                      : const Color(0xFF3A3D45),
-                                  child: Text(
-                                    isEvm ? _chainAvatarMark(id) : '—',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 18,
-                                    ),
-                                  ),
-                                ),
+                                ChainIcon(chainCode: code, size: 42),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
@@ -217,7 +207,7 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        isEvm
+                                        cfg.chainType.toUpperCase() == 'EVM'
                                             ? 'EVM · Chain ${cfg.chainId}'
                                             : '${cfg.chainType} · ${cfg.walletApiChainQuery}',
                                         style: const TextStyle(
@@ -272,7 +262,8 @@ class WalletSearchBar extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  const Icon(Icons.search, color: AppColors.textMuted, size: 20),
+                  const Icon(Icons.search,
+                      color: AppColors.textMuted, size: 20),
                   const SizedBox(width: 8),
                   Expanded(
                     child: TextField(

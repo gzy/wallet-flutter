@@ -9,6 +9,7 @@ import '../providers/wallet_controller.dart';
 import '../services/wallet/chain_rules.dart';
 import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/coin_icon.dart';
 import 'flash_screen.dart';
 import 'receive_screen.dart';
 import 'transfer_screen.dart';
@@ -1212,59 +1213,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   }
 
   Widget _tokenAvatar(CoinData coin) {
-    final symbol = coin.symbol.toUpperCase();
-    if (symbol == 'BNB') {
-      return Container(
+    return ClipOval(
+      child: SizedBox(
         width: 56,
         height: 56,
-        decoration: const BoxDecoration(
-          color: Color(0xFFF0B90B),
-          shape: BoxShape.circle,
-        ),
-        child: const Stack(
-          alignment: Alignment.center,
-          children: [
-            Positioned(top: 12, child: _Diamond(size: 5)),
-            Positioned(bottom: 14, child: _Diamond(size: 5)),
-            Positioned(left: 12, child: _Diamond(size: 5)),
-            Positioned(right: 12, child: _Diamond(size: 5)),
-            Positioned(top: 23, child: _Diamond(size: 8)),
-          ],
-        ),
-      );
-    }
-
-    if (symbol == 'ETH') {
-      return Container(
-        width: 56,
-        height: 56,
-        decoration: const BoxDecoration(
-          color: Color(0xFF6B7280),
-          shape: BoxShape.circle,
-        ),
-        child: const Center(child: _Diamond(size: 12)),
-      );
-    }
-
-    if (symbol == 'BTC') {
-      return const CircleAvatar(
-        radius: 28,
-        backgroundColor: Color(0xFFF7931A),
-        child: Text('₿',
-            style: TextStyle(
-                fontSize: 24,
-                color: Colors.white,
-                fontWeight: FontWeight.w700)),
-      );
-    }
-
-    return CircleAvatar(
-      radius: 28,
-      backgroundColor: const Color(0xFF4B5563),
-      child: Text(
-        symbol.substring(0, 1),
-        style: const TextStyle(
-            fontSize: 22, color: Colors.white, fontWeight: FontWeight.w700),
+        child: CoinIcon(symbol: coin.symbol, size: 56),
       ),
     );
   }
@@ -1540,26 +1493,6 @@ class _CoinDetailStickyTxHeaderDelegate extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant _CoinDetailStickyTxHeaderDelegate oldDelegate) {
     return extent != oldDelegate.extent || child != oldDelegate.child;
-  }
-}
-
-class _Diamond extends StatelessWidget {
-  final double size;
-  const _Diamond({required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: 0.785398, // 45°
-      child: Container(
-        width: size,
-        height: size,
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.all(Radius.circular(1.2)),
-        ),
-      ),
-    );
   }
 }
 

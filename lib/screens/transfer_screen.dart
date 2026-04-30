@@ -12,6 +12,7 @@ import '../theme/app_colors.dart';
 import '../services/wallet/chain_rules.dart';
 import '../services/wallet/wallet_gas_price_service.dart';
 import '../services/wallet/wallet_estimate_gas_service.dart';
+import '../widgets/coin_icon.dart';
 import '../widgets/pin_verify_sheet.dart';
 import 'address_book_screen.dart';
 
@@ -382,16 +383,7 @@ class _TransferScreenState extends State<TransferScreen> {
                         onTap: () => _openTokenPicker(tokens),
                         child: Row(
                           children: [
-                            CircleAvatar(
-                              radius: 22,
-                              backgroundColor: sel.color,
-                              child: Text(
-                                sel.symbol.substring(0, 1),
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700),
-                              ),
-                            ),
+                            CoinIcon(symbol: sel.symbol, size: 44),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -692,18 +684,7 @@ class _TransferScreenState extends State<TransferScreen> {
                               ),
                               child: Row(
                                 children: [
-                                  CircleAvatar(
-                                    radius: 21,
-                                    backgroundColor: t.color,
-                                    child: Text(
-                                      t.mark,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w500,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                  ),
+                                  CoinIcon(symbol: t.symbol, size: 42),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
@@ -1374,11 +1355,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
               ),
               child: Row(
                 children: [
-                  const CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Color(0xFF2A2A2E),
-                    child: Text('🪙'),
-                  ),
+                  CoinIcon(symbol: widget.sel.symbol, size: 48),
                   const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
