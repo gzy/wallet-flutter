@@ -1,10 +1,13 @@
+import 'package:bs58/bs58.dart' as bs58;
 import 'package:flutter/foundation.dart';
 
+import '../../models/app_chain_config.dart';
 import 'tron_utils.dart';
 
 enum ChainKind {
   evm,
   tron,
+  solana,
   unknown,
 }
 
@@ -26,12 +29,16 @@ class ChainRules {
     if (t.isEmpty) return ChainKind.unknown;
     if (t == 'TRON') return ChainKind.tron;
     if (t == 'EVM') return ChainKind.evm;
+    if (t == 'SOLANA' || t == 'SOL') return ChainKind.solana;
     return ChainKind.unknown;
   }
 
   static ChainKind kindFromChainQuery(String? chainQuery) {
     final q = (chainQuery ?? '').trim().toUpperCase();
     if (q.isEmpty) return ChainKind.unknown;
+    if (q == 'SOL' || q == 'SOLANA') {
+      return ChainKind.solana;
+    }
     if (q == 'TRX' ||
         q == 'TRON' ||
         q.startsWith('TRON_') ||
@@ -42,12 +49,23 @@ class ChainRules {
     return ChainKind.evm;
   }
 
+  /// 网络选择、收款等：优先 [chainType]，未知时按 `chain` 查询参数推断（如 SOL 无 chainType）。
+  static ChainKind kindForAppChain(AppChainConfig cfg) {
+    final fromType = kindFromChainType(cfg.chainType);
+    if (fromType != ChainKind.unknown) {
+      return fromType;
+    }
+    return kindFromChainQuery(cfg.walletApiChainQuery);
+  }
+
   static String badgeLabel(ChainKind kind) {
     switch (kind) {
       case ChainKind.tron:
         return 'TRON';
       case ChainKind.evm:
         return 'EVM';
+      case ChainKind.solana:
+        return 'SOL';
       case ChainKind.unknown:
         return '—';
     }
@@ -66,6 +84,8 @@ class ChainRules {
       case ChainKind.evm:
         final x = s.toLowerCase();
         return x.startsWith('0x') ? x : '0x$x';
+      case ChainKind.solana:
+        return s.replaceAll(RegExp(r'\s+'), '');
       case ChainKind.unknown:
         return s;
     }
@@ -82,8 +102,19 @@ class ChainRules {
         return _stripTron0xPrefix(s).replaceAll(RegExp(r'\s+'), '');
       case ChainKind.evm:
         return s.startsWith('0x') || s.startsWith('0X') ? s : '0x$s';
+      case ChainKind.solana:
+        return s.replaceAll(RegExp(r'\s+'), '');
       case ChainKind.unknown:
         return s;
+    }
+  }
+
+  static bool _isValidSolanaAddress(String raw) {
+    try {
+      final d = bs58.base58.decode(raw.trim());
+      return d.length == 32;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -96,6 +127,8 @@ class ChainRules {
       case ChainKind.evm:
         final x = s.startsWith('0x') || s.startsWith('0X') ? s : '0x$s';
         return RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(x);
+      case ChainKind.solana:
+        return _isValidSolanaAddress(s);
       case ChainKind.unknown:
         if (kDebugMode) {
           debugPrint('ChainRules.isValidAddress: unknown kind for "$s"');

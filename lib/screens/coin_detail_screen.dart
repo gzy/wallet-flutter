@@ -1,12 +1,15 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../models/app_chain_config.dart';
 import '../models/chain_transaction_vo.dart';
 import '../models/coin_data.dart';
 import '../providers/wallet_controller.dart';
 import '../services/wallet/chain_rules.dart';
+import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/coin_icon.dart';
@@ -24,17 +27,71 @@ CoinData _liveCoin(WalletController wc, CoinData initial) {
   return initial;
 }
 
-String _walletAddressSubtitle(WalletController wc) {
+AppChainConfig? _appChainCfgForParam(WalletController wc, String chainParam) {
+  final q = chainParam.trim();
+  if (q.isEmpty) {
+    return null;
+  }
+  for (final c in wc.backendChains) {
+    if (c.walletApiChainQuery == q) {
+      return c;
+    }
+  }
+  return null;
+}
+
+ChainKind _kindFromChainParam(WalletController wc, String chainParam) {
+  final cfg = _appChainCfgForParam(wc, chainParam);
+  if (cfg != null) {
+    return ChainRules.kindForAppChain(cfg);
+  }
+  return ChainRules.kindFromChainQuery(chainParam);
+}
+
+ChainKind _kindForCoin(WalletController wc, CoinData coin) {
+  return _kindFromChainParam(wc, wc.chainParamForCoin(coin));
+}
+
+String? _walletAddrForKind(WalletController wc, ChainKind kind) {
+  switch (kind) {
+    case ChainKind.tron:
+      return wc.tronAddress;
+    case ChainKind.solana:
+      return wc.solanaAddress;
+    case ChainKind.evm:
+    case ChainKind.unknown:
+      return wc.addressHex;
+  }
+}
+
+String _walletAddressSubtitle(WalletController wc, CoinData live) {
   final name = wc.activeWallet?.name;
-  final hex = wc.addressHex;
-  if (hex == null || hex.length < 10) {
+  final kind = _kindForCoin(wc, live);
+  final addr = _walletAddrForKind(wc, kind);
+  if (addr == null || addr.length < 10) {
     return name ?? '未连接钱包';
   }
-  final short = '${hex.substring(0, 6)}…${hex.substring(hex.length - 4)}';
+  final short = '${addr.substring(0, 6)}…${addr.substring(addr.length - 4)}';
   if (name != null && name.isNotEmpty) {
     return '$name  $short';
   }
   return short;
+}
+
+Future<void> _openExplorerAddressForCoin(
+  WalletController wc,
+  CoinData live,
+  String rawAddr,
+) async {
+  final kind = _kindForCoin(wc, live);
+  final a = ChainRules.formatAddressForUi(kind, rawAddr);
+  final link = _joinExplorerUrl(live.addressUrlPrefix, a);
+  if (link == null) {
+    return;
+  }
+  try {
+    await launchUrl(link, mode: LaunchMode.externalApplication);
+  } catch (_) {}
 }
 
 /// 交易历史列表右侧日期（与设计稿 `yyyy-MM-dd` 一致）。
@@ -61,6 +118,22 @@ Uri? _joinExplorerUrl(String? prefix, String pathTail) {
   if (t.isEmpty) {
     return null;
   }
+  // 与 Solscan 等一致：`https://solscan.io/account/{address}?cluster=devnet`
+  final withAddr =
+      p.replaceAll(RegExp(r'\{address\}', caseSensitive: false), t);
+  if (withAddr != p) {
+    return Uri.tryParse(withAddr);
+  }
+  final withTx =
+      withAddr.replaceAll(RegExp(r'\{transaction\}', caseSensitive: false), t);
+  if (withTx != withAddr) {
+    return Uri.tryParse(withTx);
+  }
+  final withHash =
+      withTx.replaceAll(RegExp(r'\{(tx|hash)\}', caseSensitive: false), t);
+  if (withHash != withTx) {
+    return Uri.tryParse(withHash);
+  }
   final b = p.endsWith('/') ? p : '$p/';
   return Uri.tryParse('$b$t');
 }
@@ -78,7 +151,13 @@ String _coinNetworkSubtitle(CoinData live) {
     return 'Chain $c';
   }
   final kind = ChainRules.kindFromChainQuery(live.walletApiChainQuery);
-  return kind == ChainKind.tron ? 'TRON' : 'EVM';
+  if (kind == ChainKind.tron) {
+    return 'TRON';
+  }
+  if (kind == ChainKind.solana) {
+    return 'SOL';
+  }
+  return 'EVM';
 }
 
 String _txHistorySubtitleFromTo(bool outgoing, String counter, ChainKind kind) {
@@ -247,10 +326,10 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (chain.isEmpty) {
         throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
       }
-      final kind = ChainRules.kindFromChainQuery(chain);
-      final address = kind == ChainKind.tron
-          ? (wc.tronAddress ?? '')
-          : ChainRules.formatAddressForUi(ChainKind.evm, wc.addressHex ?? '');
+      final kind = _kindForCoin(wc, live);
+      final raw = _walletAddrForKind(wc, kind) ?? '';
+      final address =
+          raw.isEmpty ? '' : ChainRules.formatAddressForUi(kind, raw);
       if (address.isEmpty) {
         throw StateError('缺少地址，无法拉取交易记录');
       }
@@ -320,11 +399,10 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (cache != null) {
         try {
           final chain2 = wc.chainParamForCoin(live);
-          final kind2 = ChainRules.kindFromChainQuery(chain2);
-          final ad = kind2 == ChainKind.tron
-              ? (wc.tronAddress ?? '')
-              : ChainRules.formatAddressForUi(
-                  ChainKind.evm, wc.addressHex ?? '');
+          final kind2 = _kindForCoin(wc, live);
+          final raw2 = _walletAddrForKind(wc, kind2) ?? '';
+          final ad =
+              raw2.isEmpty ? '' : ChainRules.formatAddressForUi(kind2, raw2);
           final sc = cache.transactionScopeKey(ad, chain2, live.symbol);
           final fromDisk = await cache.getTransactionHistory(sc);
           if (fromDisk != null) {
@@ -347,7 +425,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   /// 顺序执行，避免与 [WalletController.notifyListeners] 触发的重建交错导致异常或假死感。
   Future<void> _onPullRefresh() async {
     final wc = context.read<WalletController>();
-    await wc.refreshBalances();
+    final live = _liveCoin(wc, widget.coin);
+    final chainParam = wc.chainParamForCoin(live);
+    if (chainParam.trim().isNotEmpty) {
+      await wc.refreshBalancesForWalletApiChain(chainParam);
+    }
     if (!mounted) {
       return;
     }
@@ -356,29 +438,15 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
 
   Future<void> _openExplorerTxForCoin(CoinData live, String rawHash) async {
     final wc = context.read<WalletController>();
-    final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final h = kind == ChainKind.tron
-        ? rawHash.trim()
-        : (rawHash.trim().startsWith('0x')
-            ? rawHash.trim()
-            : '0x${rawHash.trim()}');
+    final kind = _kindForCoin(wc, live);
+    final t = rawHash.trim();
+    final h = switch (kind) {
+      ChainKind.evm ||
+      ChainKind.unknown =>
+        t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
+      ChainKind.tron || ChainKind.solana => t,
+    };
     final link = _joinExplorerUrl(live.txUrlPrefix, h);
-    if (link == null) {
-      return;
-    }
-    try {
-      await launchUrl(link, mode: LaunchMode.externalApplication);
-    } catch (_) {}
-  }
-
-  Future<void> _openExplorerAddressForCoin(
-      CoinData live, String rawAddr) async {
-    final wc = context.read<WalletController>();
-    final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final a = ChainRules.formatAddressForUi(kind, rawAddr);
-    final link = _joinExplorerUrl(live.addressUrlPrefix, a);
     if (link == null) {
       return;
     }
@@ -394,9 +462,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     bool useApiList,
     List<ChainTransactionVo> apiVisible,
   ) async {
-    final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
+    final kind = _kindForCoin(wc, live);
+    final walletAddr = _walletAddrForKind(wc, kind);
     if (walletAddr == null) {
       return;
     }
@@ -404,9 +471,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     if (useApiList && apiVisible.isNotEmpty) {
       final p = apiVisible.first.addressLinkPrefix?.trim();
       if (p != null && p.isNotEmpty) {
-        final uri = Uri.tryParse(
-          p.endsWith('/') ? '$p$normalized' : '$p/$normalized',
-        );
+        final uri = _joinExplorerUrl(p, normalized);
         if (uri != null) {
           try {
             await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -415,7 +480,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         }
       }
     }
-    await _openExplorerAddressForCoin(live, normalized);
+    await _openExplorerAddressForCoin(wc, live, normalized);
   }
 
   /// [apiListRow] 来自 `transactionHistory` 时，若 [ChainTransactionVo.walletHistoryRowIncludesDetail] 为真则不再请求详情接口。
@@ -437,10 +502,14 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ),
     );
     final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final h = kind == ChainKind.tron
-        ? rawTxHash
-        : (rawTxHash.startsWith('0x') ? rawTxHash : '0x$rawTxHash');
+    final kind = _kindForCoin(wc, live);
+    final rawH = rawTxHash.trim();
+    final h = switch (kind) {
+      ChainKind.evm ||
+      ChainKind.unknown =>
+        rawH.startsWith('0x') || rawH.startsWith('0X') ? rawH : '0x$rawH',
+      ChainKind.tron || ChainKind.solana => rawH,
+    };
     final detail = await _txDetailService.fetchTransactionDetail(
       txHash: h,
       chain: chain,
@@ -463,9 +532,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     String rawTxHash,
     ChainTransactionVo detail,
   ) {
-    final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
+    final kind = _kindForCoin(wc, live);
+    final walletAddr = _walletAddrForKind(wc, kind);
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => WalletTransactionDetailScreen(
@@ -489,15 +557,32 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     );
   }
 
+  Future<void> _copyReceiveAddress(BuildContext context) async {
+    final wc = context.read<WalletController>();
+    final live = _liveCoin(wc, widget.coin);
+    final kind = _kindForCoin(wc, live);
+    final raw = _walletAddrForKind(wc, kind);
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+    final text = ChainRules.formatAddressForUi(kind, raw);
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('收款地址已复制')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final wc = context.watch<WalletController>();
     final live = _liveCoin(wc, widget.coin);
     final hasChain = wc.chainParamForCoin(live).trim().isNotEmpty;
-    final subtitle = _walletAddressSubtitle(wc);
-    final chain = wc.chainParamForCoin(live);
-    final kind = ChainRules.kindFromChainQuery(chain);
-    final walletAddr = kind == ChainKind.tron ? wc.tronAddress : wc.addressHex;
+    final subtitle = _walletAddressSubtitle(wc, live);
+    final kind = _kindForCoin(wc, live);
+    final walletAddr = _walletAddrForKind(wc, kind);
     final useApiList = _txsFromApi != null;
     final visibleTxsApi = (walletAddr == null || !useApiList)
         ? const <ChainTransactionVo>[]
@@ -547,29 +632,52 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Row(
-                              children: [
-                                const CircleAvatar(
-                                  radius: 11,
-                                  backgroundColor: Color(0xFF2C2F37),
-                                  child: Icon(Icons.description_outlined,
-                                      size: 14, color: AppColors.textSecondary),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    subtitle,
-                                    style: const TextStyle(
-                                        color: AppColors.textSecondary,
-                                        fontSize: 13),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: (walletAddr?.trim().isEmpty ?? true)
+                                    ? null
+                                    : () => _copyReceiveAddress(context),
+                                borderRadius: BorderRadius.circular(10),
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 2),
+                                  child: Row(
+                                    children: [
+                                      const CircleAvatar(
+                                        radius: 11,
+                                        backgroundColor: Color(0xFF2C2F37),
+                                        child: Icon(
+                                          Icons.content_copy_outlined,
+                                          size: 14,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          subtitle,
+                                          style: const TextStyle(
+                                              color: AppColors.textSecondary,
+                                              fontSize: 13),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Icon(
+                                        Icons.copy,
+                                        size: 13,
+                                        color: (walletAddr?.trim().isEmpty ??
+                                                true)
+                                            ? AppColors.textMuted
+                                                .withValues(alpha: 0.35)
+                                            : AppColors.textMuted,
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(width: 6),
-                                const Icon(Icons.copy,
-                                    size: 13, color: AppColors.textMuted),
-                              ],
+                              ),
                             ),
                             const SizedBox(height: 12),
                             Row(
@@ -890,7 +998,9 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         !_txLoading &&
                         _txError == null &&
                         _txCompositeEmpty() &&
-                        (wc.addressHex != null || wc.tronAddress != null))
+                        (wc.addressHex != null ||
+                            wc.tronAddress != null ||
+                            wc.solanaAddress != null))
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -922,9 +1032,9 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                 const SizedBox(height: 18),
                                 TextButton(
                                   onPressed: () {
-                                    final h = wc.addressHex;
-                                    if (h != null) {
-                                      _openExplorerAddressForCoin(live, h);
+                                    final h = _walletAddrForKind(wc, kind);
+                                    if (h != null && h.isNotEmpty) {
+                                      _openExplorerAddressForCoin(wc, live, h);
                                     }
                                   },
                                   child: const Text(
@@ -1332,10 +1442,19 @@ class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
                             : '—',
                       ),
                       const Divider(height: 1, color: Color(0x332A2D35)),
-                      const _SheetKVRow(
+                      _SheetKVRow(
                         icon: Icons.vpn_key,
                         label: 'Path',
-                        value: "m/44'/60'/0'/0/0",
+                        value: switch (_kindForCoin(
+                          context.read<WalletController>(),
+                          widget.live,
+                        )) {
+                          ChainKind.solana => kSolanaDefaultDerivationPath,
+                          ChainKind.tron => kTronDefaultDerivationPath,
+                          ChainKind.evm ||
+                          ChainKind.unknown =>
+                            kEthDefaultDerivationPath,
+                        },
                       ),
                     ],
                   ),
@@ -1355,22 +1474,13 @@ class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
                         onTap: () async {
                           final nav = Navigator.of(context);
                           final wc = context.read<WalletController>();
-                          final h = wc.addressHex;
                           nav.pop();
-                          if (h == null) {
+                          final kind = _kindForCoin(wc, widget.live);
+                          final h = _walletAddrForKind(wc, kind);
+                          if (h == null || h.isEmpty) {
                             return;
                           }
-                          final uri = _joinExplorerUrl(
-                            widget.live.addressUrlPrefix,
-                            h.startsWith('0x') ? h : '0x$h',
-                          );
-                          if (uri == null) {
-                            return;
-                          }
-                          try {
-                            await launchUrl(uri,
-                                mode: LaunchMode.externalApplication);
-                          } catch (_) {}
+                          await _openExplorerAddressForCoin(wc, widget.live, h);
                         },
                       ),
                     ],

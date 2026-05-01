@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #
 # 发版：只改本行 version（如 1.0.2+4）。需更新 OTA 页/清单时单独跑任务「OTA: 从 pubspec 同步 deploy/ota」；再单独跑 Android / iOS 打包任务。
 # 双端版本号均来自此处，勿在 Xcode/Gradle 里手改覆盖。详见 .vscode/tasks.json。
-version: 1.0.1+3
+version: 1.0.1+4
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -59,6 +59,8 @@ dependencies:
   encrypt: ^5.0.3
   file_picker: ^11.0.2
   share_plus: ^10.1.4
+  ed25519_hd_key: ^2.3.0
+  bs58: ^1.0.2
 
 dev_dependencies:
   flutter_test:

@@ -130,7 +130,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final wallet = context.watch<WalletController>();
     final evmAddress = wallet.addressHex;
     final tronAddress = wallet.tronAddress;
-    if (evmAddress == null) {
+    final solanaAddress = wallet.solanaAddress;
+    if (!wallet.hasWallet) {
       return Scaffold(
         backgroundColor: AppColors.background,
         appBar: AppBar(
@@ -176,8 +177,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       (c) => c.walletApiChainQuery == token.chain,
       orElse: () => wallet.backendChains.first,
     );
-    final kind = ChainRules.kindFromChainType(cfg.chainType);
-    final address = kind == ChainKind.tron ? tronAddress : evmAddress;
+    final kind = ChainRules.kindForAppChain(cfg);
+    final address = switch (kind) {
+      ChainKind.tron => tronAddress,
+      ChainKind.solana => solanaAddress,
+      ChainKind.evm || ChainKind.unknown => evmAddress,
+    };
     if (address == null || address.isEmpty) {
       return Scaffold(
         backgroundColor: AppColors.background,

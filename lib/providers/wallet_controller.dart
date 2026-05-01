@@ -16,6 +16,7 @@ import '../models/stored_wallet.dart';
 import '../services/market/app_price_service.dart';
 import '../services/wallet/chains_service.dart';
 import '../services/wallet/wallet_balance_service.dart';
+import '../services/wallet/chain_rules.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
@@ -56,6 +57,7 @@ class WalletController extends ChangeNotifier {
   String? _addressHex;
   Uint8List? _tronPrivateKey;
   String? _tronAddress;
+  String? _solanaAddress;
   bool _backedUp = false;
   bool _loading = false;
 
@@ -80,6 +82,7 @@ class WalletController extends ChangeNotifier {
   bool get hasWallet => _credentials != null;
   String? get addressHex => _addressHex;
   String? get tronAddress => _tronAddress;
+  String? get solanaAddress => _solanaAddress;
   EthereumAddress? get address =>
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
@@ -269,7 +272,7 @@ class WalletController extends ChangeNotifier {
 
   Iterable<AppChainConfig> _activeBackendChains() sync* {
     for (final c in _backendChains) {
-      if (c.chainId.isEmpty) {
+      if (c.walletApiChainQuery.trim().isEmpty) {
         continue;
       }
       if (c.status != null && c.status != 1) {
@@ -290,6 +293,178 @@ class WalletController extends ChangeNotifier {
       default:
         final u = symbol.toUpperCase();
         return u.isEmpty ? '◆' : u.substring(0, 1);
+    }
+  }
+
+  /// 拉取单条链的余额并组装 [CoinData]；`null` 表示无主地址或接口失败（全量刷新时跳过该链；单链刷新时保留旧数据）。
+  Future<List<CoinData>?> _loadCoinsForChainConfig(
+    AppChainConfig chainCfg,
+    Map<String, AppSymbolQuote> quotes,
+  ) async {
+    final creds = _credentials;
+    if (creds == null) {
+      return null;
+    }
+    final chainParam = chainCfg.walletApiChainQuery;
+    final kind = ChainRules.kindForAppChain(chainCfg);
+    final addressHex = creds.address.hex;
+    final tronAddr = _tronAddress;
+    final ownerAddress = switch (kind) {
+      ChainKind.tron => tronAddr ?? '',
+      ChainKind.solana => _solanaAddress ?? '',
+      ChainKind.evm || ChainKind.unknown => addressHex,
+    };
+    if (ownerAddress.isEmpty) {
+      return null;
+    }
+    if (kDebugMode) {
+      debugPrint(
+        'refreshBalances: chain=$chainParam kind=$kind address=$ownerAddress',
+      );
+    }
+    final remote = await _walletBalanceService.fetchBalances(
+      address: ownerAddress,
+      chain: chainParam,
+    );
+    if (remote == null) {
+      return null;
+    }
+    final chainIdInt =
+        kind == ChainKind.evm ? int.tryParse(chainCfg.chainId) : null;
+    final coins = <CoinData>[];
+    final seen = <String>{};
+    if (remote.isNotEmpty) {
+      for (final row in remote) {
+        final sym = row.crypto?.trim() ?? '';
+        if (sym.isEmpty) {
+          continue;
+        }
+        final key = '${chainCfg.backendStableSegment}_${sym.toUpperCase()}';
+        if (!seen.add(key)) {
+          continue;
+        }
+        AppChainCrypto? meta;
+        for (final x in chainCfg.cryptos) {
+          if (x.crypto.toUpperCase() == sym.toUpperCase()) {
+            meta = x;
+            break;
+          }
+        }
+        final pair = AppPriceService.usdtPairKeyForSymbol(sym);
+        final q = AppPriceService.resolveQuote(sym, quotes[pair]);
+        final price = q.price;
+        final change = q.change24h;
+        final bal = row.balance;
+        coins.add(
+          CoinData(
+            id: chainCfg.coinPrimaryId(sym),
+            symbol: sym.toUpperCase(),
+            name: meta?.cryptoName ?? sym.toUpperCase(),
+            icon: _cryptoListIcon(sym),
+            network: chainCfg.chainName,
+            chainId: chainIdInt,
+            walletApiChainQuery: chainParam,
+            txUrlPrefix: chainCfg.txUrlPrefix,
+            addressUrlPrefix: chainCfg.addressUrlPrefix,
+            price: price,
+            priceChange24h: change,
+            balance: bal,
+            balanceUSD: bal * price,
+          ),
+        );
+      }
+    } else {
+      for (final c in chainCfg.cryptos) {
+        if (c.isNative != 1) {
+          continue;
+        }
+        final sym = c.crypto.toUpperCase();
+        final key = '${chainCfg.backendStableSegment}_$sym';
+        if (!seen.add(key)) {
+          continue;
+        }
+        final pair = AppPriceService.usdtPairKeyForSymbol(sym);
+        final q = AppPriceService.resolveQuote(sym, quotes[pair]);
+        final price = q.price;
+        final change = q.change24h;
+        const bal = 0.0;
+        coins.add(
+          CoinData(
+            id: chainCfg.coinPrimaryId(sym),
+            symbol: sym,
+            name: c.cryptoName ?? sym,
+            icon: _cryptoListIcon(sym),
+            network: chainCfg.chainName,
+            chainId: chainIdInt,
+            walletApiChainQuery: chainParam,
+            txUrlPrefix: chainCfg.txUrlPrefix,
+            addressUrlPrefix: chainCfg.addressUrlPrefix,
+            price: price,
+            priceChange24h: change,
+            balance: bal,
+            balanceUSD: bal * price,
+          ),
+        );
+      }
+    }
+    return coins;
+  }
+
+  /// 币种详情等处：只刷新 `_backendChains` 中某条 `walletApiChainQuery`，减少无关链请求。
+  Future<void> refreshBalancesForWalletApiChain(
+      String walletApiChainQuery) async {
+    if (_credentials == null) {
+      return;
+    }
+    final want = walletApiChainQuery.trim();
+    if (want.isEmpty) {
+      return;
+    }
+    AppChainConfig? cfg;
+    for (final c in _activeBackendChains()) {
+      if (c.walletApiChainQuery.trim().toUpperCase() == want.toUpperCase()) {
+        cfg = c;
+        break;
+      }
+    }
+    if (cfg == null) {
+      return;
+    }
+    _loading = true;
+    notifyListeners();
+    try {
+      var quotes = await _appPriceService.fetchAllPrices();
+      if (quotes.isEmpty) {
+        final cachedQ = await _localCache?.getPriceQuotes();
+        if (cachedQ != null && cachedQ.isNotEmpty) {
+          quotes = cachedQ;
+        }
+      }
+      final replacement = await _loadCoinsForChainConfig(cfg, quotes);
+      if (replacement == null) {
+        return;
+      }
+      final qUpper = cfg.walletApiChainQuery.trim().toUpperCase();
+      final others = _evmCoins
+          .where(
+            (c) => (c.walletApiChainQuery ?? '').trim().toUpperCase() != qUpper,
+          )
+          .toList();
+      _evmCoins = [...others, ...replacement];
+      _ensureSendChainDefault();
+
+      final wid = _activeWalletId;
+      if (wid != null) {
+        unawaited(_localCache?.putEvmCoinsForWallet(wid, _evmCoins));
+        if (quotes.isNotEmpty) {
+          unawaited(_localCache?.putPriceQuotes(quotes));
+        }
+      }
+    } catch (e, st) {
+      debugPrint('refreshBalancesForWalletApiChain: $e\n$st');
+    } finally {
+      _loading = false;
+      notifyListeners();
     }
   }
 
@@ -389,11 +564,28 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  Future<void> _applyDerivedKeysFromMnemonic(String m) async {
+    _credentials = HdWalletService.privateKeyFromMnemonic(m);
+    _addressHex = _credentials!.address.hex;
+    final tronPk = Uint8List.fromList(
+      HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
+    );
+    _tronPrivateKey = tronPk;
+    _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
+    try {
+      _solanaAddress = await HdWalletService.solanaAddressFromMnemonic(m);
+    } catch (e, st) {
+      debugPrint('Solana derive failed: $e\n$st');
+      _solanaAddress = null;
+    }
+  }
+
   Future<void> _loadCredentialsFromActiveMnemonic() async {
     _credentials = null;
     _addressHex = null;
     _tronPrivateKey = null;
     _tronAddress = null;
+    _solanaAddress = null;
     _backedUp = false;
     final id = _activeWalletId;
     if (id == null) {
@@ -404,13 +596,7 @@ class WalletController extends ChangeNotifier {
       return;
     }
     try {
-      _credentials = HdWalletService.privateKeyFromMnemonic(m);
-      _addressHex = _credentials!.address.hex;
-      final tronPk = Uint8List.fromList(
-        HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
-      );
-      _tronPrivateKey = tronPk;
-      _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
+      await _applyDerivedKeysFromMnemonic(m);
       final idx = _wallets.indexWhere((w) => w.id == id);
       _backedUp = idx >= 0
           ? _wallets[idx].backedUp
@@ -421,6 +607,7 @@ class WalletController extends ChangeNotifier {
       _addressHex = null;
       _tronPrivateKey = null;
       _tronAddress = null;
+      _solanaAddress = null;
     }
   }
 
@@ -459,8 +646,16 @@ class WalletController extends ChangeNotifier {
 
     _wallets = next;
     _activeWalletId = id;
-    _credentials = HdWalletService.privateKeyFromMnemonic(m);
-    _addressHex = _credentials!.address.hex;
+    try {
+      await _applyDerivedKeysFromMnemonic(m);
+    } catch (e, st) {
+      debugPrint('createWallet derive failed: $e\n$st');
+      _credentials = null;
+      _addressHex = null;
+      _tronPrivateKey = null;
+      _tronAddress = null;
+      _solanaAddress = null;
+    }
     _backedUp = false;
     _sessionUnlocked = true;
     if (_pinEnabled) {
@@ -535,8 +730,16 @@ class WalletController extends ChangeNotifier {
 
     _wallets = next;
     _activeWalletId = id;
-    _credentials = HdWalletService.privateKeyFromMnemonic(phrase);
-    _addressHex = _credentials!.address.hex;
+    try {
+      await _applyDerivedKeysFromMnemonic(phrase);
+    } catch (e, st) {
+      debugPrint('importWallet derive failed: $e\n$st');
+      _credentials = null;
+      _addressHex = null;
+      _tronPrivateKey = null;
+      _tronAddress = null;
+      _solanaAddress = null;
+    }
     _backedUp = false;
     _sessionUnlocked = true;
     if (_pinEnabled) {
@@ -624,6 +827,9 @@ class WalletController extends ChangeNotifier {
         await _storage.clearActiveWalletId();
         _credentials = null;
         _addressHex = null;
+        _tronPrivateKey = null;
+        _tronAddress = null;
+        _solanaAddress = null;
         _backedUp = false;
         _evmCoins = [];
       } else {
@@ -677,6 +883,20 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  /// 根据助记词推导该钱包的 Solana 地址（Base58），不切换当前钱包。
+  Future<String?> readSolanaAddressForWallet(String walletId) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return await HdWalletService.solanaAddressFromMnemonic(m);
+    } catch (e, st) {
+      debugPrint('readSolanaAddressForWallet: $e\n$st');
+      return null;
+    }
+  }
+
   Future<PinVerifyResult> verifyTransactionPin(String pin) =>
       _storage.verifyPin(pin);
 
@@ -726,9 +946,6 @@ class WalletController extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     try {
-      final addr = _credentials!.address;
-      final addressHex = addr.hex;
-      final tronAddr = _tronAddress;
       var quotes = await _appPriceService.fetchAllPrices();
       if (quotes.isEmpty) {
         final cachedQ = await _localCache?.getPriceQuotes();
@@ -742,103 +959,18 @@ class WalletController extends ChangeNotifier {
       if (backendChains.isNotEmpty) {
         final seen = <String>{};
         for (final chainCfg in backendChains) {
-          final chainParam = chainCfg.walletApiChainQuery;
-          final chainType = chainCfg.chainType.trim().toUpperCase();
-          final ownerAddress = switch (chainType) {
-            'TRON' => tronAddr ?? '',
-            _ => addressHex,
-          };
-          if (ownerAddress.isEmpty) {
+          final partial = await _loadCoinsForChainConfig(chainCfg, quotes);
+          if (partial == null) {
             continue;
           }
-          if (kDebugMode) {
-            debugPrint(
-              'refreshBalances: chain=$chainParam type=$chainType address=$ownerAddress',
-            );
-          }
-          final remote = await _walletBalanceService.fetchBalances(
-            address: ownerAddress,
-            chain: chainParam,
-          );
-          if (remote != null) {
-            anyBalanceRequestOk = true;
-          }
-          final chainIdInt = chainCfg.chainType.toUpperCase() == 'EVM'
-              ? int.tryParse(chainCfg.chainId)
-              : null;
-          if (remote != null && remote.isNotEmpty) {
-            for (final row in remote) {
-              final sym = row.crypto?.trim() ?? '';
-              if (sym.isEmpty) {
-                continue;
-              }
-              final key = '${chainCfg.chainId}_${sym.toUpperCase()}';
-              if (!seen.add(key)) {
-                continue;
-              }
-              AppChainCrypto? meta;
-              for (final x in chainCfg.cryptos) {
-                if (x.crypto.toUpperCase() == sym.toUpperCase()) {
-                  meta = x;
-                  break;
-                }
-              }
-              final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-              final q = AppPriceService.resolveQuote(sym, quotes[pair]);
-              final price = q.price;
-              final change = q.change24h;
-              final bal = row.balance;
-              coins.add(
-                CoinData(
-                  id: 'evm_${chainCfg.chainId}_${sym.toUpperCase()}',
-                  symbol: sym.toUpperCase(),
-                  name: meta?.cryptoName ?? sym.toUpperCase(),
-                  icon: _cryptoListIcon(sym),
-                  network: chainCfg.chainName,
-                  chainId: chainIdInt,
-                  walletApiChainQuery: chainParam,
-                  txUrlPrefix: chainCfg.txUrlPrefix,
-                  addressUrlPrefix: chainCfg.addressUrlPrefix,
-                  price: price,
-                  priceChange24h: change,
-                  balance: bal,
-                  balanceUSD: bal * price,
-                ),
-              );
+          anyBalanceRequestOk = true;
+          for (final cd in partial) {
+            final key =
+                '${chainCfg.backendStableSegment}_${cd.symbol.toUpperCase()}';
+            if (!seen.add(key)) {
+              continue;
             }
-          } else {
-            for (final c in chainCfg.cryptos) {
-              if (c.isNative != 1) {
-                continue;
-              }
-              final sym = c.crypto.toUpperCase();
-              final key = '${chainCfg.chainId}_$sym';
-              if (!seen.add(key)) {
-                continue;
-              }
-              final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-              final q = AppPriceService.resolveQuote(sym, quotes[pair]);
-              final price = q.price;
-              final change = q.change24h;
-              const bal = 0.0;
-              coins.add(
-                CoinData(
-                  id: 'evm_${chainCfg.chainId}_$sym',
-                  symbol: sym,
-                  name: c.cryptoName ?? sym,
-                  icon: _cryptoListIcon(sym),
-                  network: chainCfg.chainName,
-                  chainId: chainIdInt,
-                  walletApiChainQuery: chainParam,
-                  txUrlPrefix: chainCfg.txUrlPrefix,
-                  addressUrlPrefix: chainCfg.addressUrlPrefix,
-                  price: price,
-                  priceChange24h: change,
-                  balance: bal,
-                  balanceUSD: bal * price,
-                ),
-              );
-            }
+            coins.add(cd);
           }
         }
       }
@@ -993,20 +1125,22 @@ class WalletController extends ChangeNotifier {
     if (key == null) {
       throw StateError('No wallet');
     }
-    final chainType = backendChains
-        .firstWhere(
-          (c) => c.walletApiChainQuery == chain,
-          orElse: () => const AppChainConfig(
-            chainId: '',
-            chainType: 'EVM',
-            chainName: '',
-            symbol: '',
-          ),
-        )
-        .chainType
-        .toUpperCase();
+    final cfg = backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == chain,
+      orElse: () => const AppChainConfig(
+        chainId: '',
+        chainType: 'EVM',
+        chainName: '',
+        symbol: '',
+      ),
+    );
+    final kind = ChainRules.kindForAppChain(cfg);
 
-    if (chainType == 'TRON') {
+    if (kind == ChainKind.solana) {
+      throw StateError('Solana 链转账尚未在客户端实现签名，请等待后续版本');
+    }
+
+    if (kind == ChainKind.tron) {
       final pk = _tronPrivateKey;
       final owner = _tronAddress;
       if (pk == null || owner == null || owner.isEmpty) {

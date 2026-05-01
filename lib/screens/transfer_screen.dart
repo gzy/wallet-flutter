@@ -313,7 +313,17 @@ class _TransferScreenState extends State<TransferScreen> {
     final sel = _selectedToken(tokens);
     final amountBalanceErr = _transferAmountBalanceError(_amount.text, sel);
     final canOpenConfirm = amountBalanceErr == null;
-    final fromAddr = wallet.addressHex;
+    final chainQuerySel = wallet.chainParamForCoin(sel.coin);
+    final chainCfgSel = wallet.backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == chainQuerySel,
+      orElse: () => wallet.backendChains.first,
+    );
+    final sendKind = ChainRules.kindForAppChain(chainCfgSel);
+    final fromAddr = switch (sendKind) {
+      ChainKind.tron => wallet.tronAddress,
+      ChainKind.solana => wallet.solanaAddress,
+      ChainKind.evm || ChainKind.unknown => wallet.addressHex,
+    };
     final walletName = wallet.activeWallet?.name.trim();
     final fromWalletLabel = (walletName != null && walletName.isNotEmpty)
         ? walletName
@@ -780,20 +790,29 @@ class _TransferScreenState extends State<TransferScreen> {
       (c) => c.walletApiChainQuery == chainQuery,
       orElse: () => wallet.backendChains.first,
     );
-    final kind = ChainRules.kindFromChainType(chainCfg.chainType);
+    final kind = ChainRules.kindForAppChain(chainCfg);
+    if (kind == ChainKind.solana) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Solana 链转出尚未开放，请等待后续版本'),
+        ),
+      );
+      return;
+    }
     final isTron = kind == ChainKind.tron;
     final from = (isTron ? wallet.tronAddress : wallet.addressHex) ?? '';
     final toNorm = _normalizeAddrField(_address.text);
     final isToValid = ChainRules.isValidAddress(kind, toNorm);
     if (!isToValid) {
+      final invalidMsg = switch (kind) {
+        ChainKind.tron => '收款地址格式无效，请使用 Tron 的 T... 地址',
+        ChainKind.solana => '收款地址格式无效，请使用 Solana Base58 地址',
+        ChainKind.evm ||
+        ChainKind.unknown =>
+          '收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址',
+      };
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isTron
-                ? '收款地址格式无效，请使用 Tron 的 T... 地址'
-                : '收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址',
-          ),
-        ),
+        SnackBar(content: Text(invalidMsg)),
       );
       return;
     }
@@ -1116,7 +1135,18 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       (c) => c.walletApiChainQuery == _chainCode,
       orElse: () => widget.wallet.backendChains.first,
     );
-    final isTron = chainCfg.chainType.trim().toUpperCase() == 'TRON';
+    final chainKind = ChainRules.kindForAppChain(chainCfg);
+    if (chainKind == ChainKind.solana) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _priceLoading = false;
+        _limitLoading = false;
+      });
+      return;
+    }
+    final isTron = chainKind == ChainKind.tron;
     _isTron ??= isTron;
     if (isTron) {
       // TRON 不展示矿工费（能量/带宽模型），且不应阻塞“转出”按钮。
@@ -1154,7 +1184,11 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       return;
     }
     final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
-    final owner = isTron ? widget.wallet.tronAddress : widget.wallet.addressHex;
+    final owner = switch (chainKind) {
+      ChainKind.tron => widget.wallet.tronAddress,
+      ChainKind.solana => widget.wallet.solanaAddress,
+      ChainKind.evm || ChainKind.unknown => widget.wallet.addressHex,
+    };
     final amount = double.tryParse(widget.amountStr);
     int? fromApi;
     if (owner == null || owner.isEmpty || amount == null) {
@@ -1549,22 +1583,38 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       );
                                       return;
                                     }
-                                    final owner = _isTron == true
-                                        ? widget.wallet.tronAddress
-                                        : widget.wallet.addressHex;
+                                    final chainCfgExec =
+                                        widget.wallet.backendChains.firstWhere(
+                                      (c) =>
+                                          c.walletApiChainQuery == _chainCode,
+                                      orElse: () =>
+                                          widget.wallet.backendChains.first,
+                                    );
+                                    final execKind = ChainRules.kindForAppChain(
+                                        chainCfgExec);
+                                    final owner = switch (execKind) {
+                                      ChainKind.tron =>
+                                        widget.wallet.tronAddress,
+                                      ChainKind.solana =>
+                                        widget.wallet.solanaAddress,
+                                      ChainKind.evm ||
+                                      ChainKind.unknown =>
+                                        widget.wallet.addressHex,
+                                    };
                                     if (owner == null || owner.isEmpty) {
                                       messenger.showSnackBar(
                                         const SnackBar(content: Text('钱包地址为空')),
                                       );
                                       return;
                                     }
-                                    final gasPriceType = _isTron == true
-                                        ? null
-                                        : switch (_gasLevel) {
-                                            '低' => 'slow',
-                                            '高' => 'fast',
-                                            _ => 'medium',
-                                          };
+                                    final gasPriceType =
+                                        execKind == ChainKind.tron
+                                            ? null
+                                            : switch (_gasLevel) {
+                                                '低' => 'slow',
+                                                '高' => 'fast',
+                                                _ => 'medium',
+                                              };
                                     if (!host.mounted) {
                                       return;
                                     }

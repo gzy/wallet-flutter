@@ -52,13 +52,24 @@ String _chainAvatarMark(int chainId) {
   return marks[chainId.abs() % marks.length];
 }
 
+String _chainPickerSubtitle(AppChainConfig cfg) {
+  final t = cfg.chainType.trim().toUpperCase();
+  if (t == 'EVM' && cfg.chainId.trim().isNotEmpty) {
+    return 'EVM · Chain ${cfg.chainId}';
+  }
+  if (t.isNotEmpty) {
+    return '$t · ${cfg.walletApiChainQuery}';
+  }
+  return cfg.walletApiChainQuery;
+}
+
 /// 样式对齐 [TransferScreen] 内「选择币种」底部弹层（圆角、深色底、标题行、列表卡片）。
 Future<String?> showWalletNetworkPicker(BuildContext context) {
   final wc = context.read<WalletController>();
   final current = wc.sendChain;
   final options = <AppChainConfig>[];
   for (final c in wc.backendChains) {
-    if (c.chainId.isEmpty) {
+    if (c.walletApiChainQuery.trim().isEmpty) {
       continue;
     }
     if (c.status != null && c.status != 1) {
@@ -221,9 +232,7 @@ Future<String?> showWalletNetworkPicker(BuildContext context) {
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        cfg.chainType.toUpperCase() == 'EVM'
-                                            ? 'EVM · Chain ${cfg.chainId}'
-                                            : '${cfg.chainType} · ${cfg.walletApiChainQuery}',
+                                        _chainPickerSubtitle(cfg),
                                         style: const TextStyle(
                                           fontSize: 14,
                                           color: AppColors.textSecondary,

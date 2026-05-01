@@ -20,7 +20,7 @@ class AppChainConfig {
     this.cryptos = const [],
   });
 
-  /// 链 ID（字符串，如 `11155111`），与 RPC / 本地 `chainId` 对齐。
+  /// 链 ID（字符串，如 `11155111`），多见于 EVM；Solana 等可无此字段而为空字符串。
   final String chainId;
   final String chainType;
   final String chainName;
@@ -80,6 +80,28 @@ class AppChainConfig {
         'version': version,
         'cryptos': cryptos.map((c) => c.toJson()).toList(),
       };
+}
+
+extension AppChainConfigIdentifiers on AppChainConfig {
+  /// 列表去重用：有数值/字符串 [chainId] 时用链 Id；否则用钱包接口 `chain` 参数（如 SOL）。
+  String get backendStableSegment {
+    final id = chainId.trim();
+    if (id.isNotEmpty) {
+      return id;
+    }
+    return walletApiChainQuery.trim();
+  }
+
+  /// [CoinData.id]：带 chainId 的链沿用 `evm_` 前缀以兼容历史；无 chainId 时用 `chain_` + 查询参数。
+  String coinPrimaryId(String symbolUpper) {
+    final sym = symbolUpper.toUpperCase();
+    final id = chainId.trim();
+    if (id.isNotEmpty) {
+      return 'evm_${id}_$sym';
+    }
+    final q = walletApiChainQuery.trim();
+    return 'chain_${q}_$sym';
+  }
 }
 
 class AppChainCrypto {

@@ -51,9 +51,14 @@ String _formatFullDateTime(DateTime? t) {
   return '${x.year}-${two(x.month)}-${two(x.day)} ${two(x.hour)}:${two(x.minute)}:${two(x.second)}';
 }
 
-String _midTruncHash(String hash, {required bool isTron}) {
+String _midTruncHash(String hash, ChainKind kind) {
   final raw = hash.trim();
-  final h = isTron ? raw : (raw.startsWith('0x') ? raw : '0x$raw');
+  final h = switch (kind) {
+    ChainKind.evm ||
+    ChainKind.unknown =>
+      raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
+    ChainKind.tron || ChainKind.solana => raw,
+  };
   if (h.length <= 22) {
     return h;
   }
@@ -63,7 +68,7 @@ String _midTruncHash(String hash, {required bool isTron}) {
 bool _txOutgoing(
   ChainTransactionVo tx,
   String? walletAddress, {
-  required bool isTron,
+  required ChainKind chainKind,
 }) {
   final fd = tx.fundDirection?.toLowerCase().trim();
   if (fd == 'out' || fd == 'send' || fd == 'outgoing') {
@@ -72,12 +77,12 @@ bool _txOutgoing(
   if (fd == 'in' || fd == 'receive' || fd == 'incoming') {
     return false;
   }
-  final w = _normWalletAddr(walletAddress, isTron: isTron);
+  final w = _normWalletAddr(walletAddress, chainKind);
   if (w.isEmpty) {
     return false;
   }
-  final from = _normAddr(tx.fromAddress, isTron: isTron);
-  final to = _normAddr(tx.toAddress, isTron: isTron);
+  final from = _normAddr(tx.fromAddress, chainKind);
+  final to = _normAddr(tx.toAddress, chainKind);
   if (from == w && to != w) {
     return true;
   }
@@ -87,7 +92,7 @@ bool _txOutgoing(
   return false;
 }
 
-String _normWalletAddr(String? raw, {required bool isTron}) {
+String _normWalletAddr(String? raw, ChainKind kind) {
   if (raw == null) {
     return '';
   }
@@ -95,14 +100,18 @@ String _normWalletAddr(String? raw, {required bool isTron}) {
   if (s.isEmpty) {
     return '';
   }
-  if (isTron) {
-    return s;
+  switch (kind) {
+    case ChainKind.tron:
+    case ChainKind.solana:
+      return s;
+    case ChainKind.evm:
+    case ChainKind.unknown:
+      final x = s.toLowerCase();
+      return x.startsWith('0x') ? x : '0x$x';
   }
-  final x = s.toLowerCase();
-  return x.startsWith('0x') ? x : '0x$x';
 }
 
-String _normAddr(String? raw, {required bool isTron}) {
+String _normAddr(String? raw, ChainKind kind) {
   if (raw == null) {
     return '';
   }
@@ -110,11 +119,15 @@ String _normAddr(String? raw, {required bool isTron}) {
   if (s.isEmpty) {
     return '';
   }
-  if (isTron) {
-    return s;
+  switch (kind) {
+    case ChainKind.tron:
+    case ChainKind.solana:
+      return s;
+    case ChainKind.evm:
+    case ChainKind.unknown:
+      final x = s.toLowerCase();
+      return x.startsWith('0x') ? x : '0x$x';
   }
-  final x = s.toLowerCase();
-  return x.startsWith('0x') ? x : '0x$x';
 }
 
 /// 后端 `status`：0 / 1 视为链上成功态（与设计稿「交易成功」一致）。
@@ -178,13 +191,22 @@ Uri? _txExplorerUri(ChainTransactionVo detail, CoinData coin, String rawHash) {
   if (link != null && link.isNotEmpty) {
     return Uri.tryParse(link);
   }
-  final isTron =
-      ChainRules.kindFromChainQuery(coin.walletApiChainQuery) == ChainKind.tron;
+  final kind = ChainRules.kindFromChainQuery(coin.walletApiChainQuery);
   final raw = rawHash.trim();
-  final h = isTron ? raw : (raw.startsWith('0x') ? raw : '0x$raw');
+  final h = switch (kind) {
+    ChainKind.evm ||
+    ChainKind.unknown =>
+      raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
+    ChainKind.tron || ChainKind.solana => raw,
+  };
   final p = coin.txUrlPrefix?.trim();
   if (p == null || p.isEmpty) {
     return null;
+  }
+  var u = p.replaceAll(RegExp(r'\{transaction\}', caseSensitive: false), h);
+  u = u.replaceAll(RegExp(r'\{(tx|hash)\}', caseSensitive: false), h);
+  if (u != p) {
+    return Uri.tryParse(u);
   }
   final b = p.endsWith('/') ? p : '$p/';
   return Uri.tryParse('$b$h');
@@ -245,9 +267,8 @@ class WalletTransactionDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isTron = ChainRules.kindFromChainQuery(coin.walletApiChainQuery) ==
-        ChainKind.tron;
-    final outgoing = _txOutgoing(detail, walletHex, isTron: isTron);
+    final chainKind = ChainRules.kindFromChainQuery(coin.walletApiChainQuery);
+    final outgoing = _txOutgoing(detail, walletHex, chainKind: chainKind);
     final title = outgoing ? '转出' : '收款';
     final sym = detail.crypto?.trim().isNotEmpty == true
         ? detail.crypto!.trim()
@@ -264,8 +285,8 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     final counterparty = _counterpartyAddress(detail);
     final canTransfer = counterparty != null &&
         counterparty.isNotEmpty &&
-        _normAddr(counterparty, isTron: isTron) !=
-            _normWalletAddr(walletHex, isTron: isTron);
+        _normAddr(counterparty, chainKind) !=
+            _normWalletAddr(walletHex, chainKind);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -319,7 +340,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   _addressCard(context, from, to),
                   const SizedBox(height: 12),
-                  _chainCard(context, hash, isTron: isTron),
+                  _chainCard(context, hash, chainKind),
                 ],
               ),
             ),
@@ -561,7 +582,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _chainCard(BuildContext context, String hash, {required bool isTron}) {
+  Widget _chainCard(BuildContext context, String hash, ChainKind chainKind) {
     final block = detail.blockNumber?.trim() ?? '';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -612,7 +633,7 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                             child: Text(
                               hash.isEmpty
                                   ? '—'
-                                  : _midTruncHash(hash, isTron: isTron),
+                                  : _midTruncHash(hash, chainKind),
                               textAlign: TextAlign.end,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
