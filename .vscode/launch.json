@@ -1,7 +1,8 @@
 {
     // 运行和调试：链/主测网以 `GET /api/app/chains` 等后端接口为准，不再通过 EVM_FLAVOR 区分。
-    // 模拟器 / 当前默认设备：选「调试」；仅插 USB 真机时选「USB 真机 | …」。
-    // 打包 APK/AAB：命令面板「Tasks: Run Task」选「Android: APK/…」，见 .vscode/tasks.json（launch 仍是 flutter run）。
+    // 模拟器 / 当前默认设备：选「调试」；无线 iPhone：选「无线真机 | …」（device id 以 `flutter devices` 为准，换机后改 launch）。
+    // 仅插 USB 真机时选「USB 真机 | …」。
+    // 打包 / OTA 同步：命令面板「Tasks: Run Task」，见 .vscode/tasks.json（launch 仍是 flutter run）。
     //
     // iOS 26 真机 + Debug：DartWorker EXC_BAD_ACCESS (code=50) 多见 Xcode 26.4 LLDB（flutter/flutter#184254）；已换 Xcode 26.3 可优先用默认 LLDB。
     // 若仍崩：真机「Profile/Release」或模拟器 Debug；或 Xcode Settings → Components 重装 Device Support / Metal Toolchain。
@@ -11,6 +12,29 @@
             "name": "调试",
             "request": "launch",
             "type": "dart"
+        },
+        {
+            "name": "无线真机 | 桂子阳 iPhone",
+            "request": "launch",
+            "type": "dart",
+            "args": [
+                "-d",
+                "00008110-001A45993C12401E",
+                "--device-timeout",
+                "60"
+            ]
+        },
+        {
+            "name": "无线真机 | Profile",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile",
+            "args": [
+                "-d",
+                "00008110-001A45993C12401E",
+                "--device-timeout",
+                "60"
+            ]
         },
         {
             "name": "USB 真机",

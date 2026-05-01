@@ -253,7 +253,7 @@
 		<div class="card">
 			<div class="ver">
 				<span class="ver-tag" id="plat-tag">—</span>
-				<span>版本 <strong id="v-name">—</strong> · 构建 <strong id="v-build">—</strong></span>
+				<span>版本 <strong id="v-name">—</strong> · 构建 <strong id="v-build">—</strong> · 更新 <strong id="v-date">—</strong></span>
 			</div>
 			<a id="install" class="btn-primary" href="#">主操作</a>
 			<a id="install-alt" class="btn-secondary hidden" href="#">其他系统</a>
@@ -274,7 +274,9 @@
 			var ANDROID_APK = "app-release.apk";
 			/** 展示用版本号（建议用 tools/sync_ota_version.dart 从 pubspec.yaml 同步） */
 			var APP_VERSION_NAME = "1.0.1";
-			var APP_BUILD_NUMBER = "2";
+			var APP_BUILD_NUMBER = "3";
+			/** 中文年月日；运行 tools/sync_ota_version.dart 时写入为脚本执行当天（本地时区） */
+			var APP_RELEASE_DATE = "2026年5月1日";
 
 			function normBase(b) {
 				return b.replace(/\/+$/, "");
@@ -312,11 +314,13 @@
 			var platTag = document.getElementById("plat-tag");
 			var vName = document.getElementById("v-name");
 			var vBuild = document.getElementById("v-build");
+			var vDate = document.getElementById("v-date");
 			var a = document.getElementById("install");
 			var alt = document.getElementById("install-alt");
 			var hint = document.getElementById("hint");
 			if (vName) vName.textContent = APP_VERSION_NAME;
 			if (vBuild) vBuild.textContent = APP_BUILD_NUMBER;
+			if (vDate) vDate.textContent = APP_RELEASE_DATE;
 
 			if (d.iOS) {
 				badge.textContent = "TestFlight / Ad Hoc";

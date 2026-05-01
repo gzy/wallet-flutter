@@ -20,6 +20,20 @@ String _networkPillLabel(WalletController wc) {
   return q;
 }
 
+/// 与弹窗列表一致，供 [ChainIcon]；`null` 表示「全部」：胶囊外只显示文字；非 null 时只显示图标。
+String? _networkPillIconChainCode(WalletController wc) {
+  final q = wc.sendChain;
+  if (q == null) {
+    return null;
+  }
+  for (final c in wc.backendChains) {
+    if (c.walletApiChainQuery == q) {
+      return (c.chainCode ?? c.walletApiChainQuery).trim();
+    }
+  }
+  return q.trim();
+}
+
 // 兼容：历史版本里网络选择弹窗使用过 `_chainAccentColor/_chainAvatarMark`。
 // 热重载时旧闭包可能仍在调用它们；保留空实现避免 NoSuchMethodError。
 Color _chainAccentColor(int chainId) {
@@ -292,6 +306,7 @@ class WalletSearchBar extends StatelessWidget {
           Consumer<WalletController>(
             builder: (context, wc, _) {
               final label = _networkPillLabel(wc);
+              final iconCode = _networkPillIconChainCode(wc);
               return Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -305,9 +320,13 @@ class WalletSearchBar extends StatelessWidget {
                     context.read<WalletController>().setSendChain(picked);
                   },
                   child: Container(
-                    constraints: const BoxConstraints(maxWidth: 132),
+                    constraints: BoxConstraints(
+                      maxWidth: iconCode == null ? 140 : 64,
+                    ),
                     height: 48,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: iconCode == null ? 10 : 8,
+                    ),
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       borderRadius: BorderRadius.circular(10),
@@ -315,17 +334,20 @@ class WalletSearchBar extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Flexible(
-                          child: Text(
-                            label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 13,
+                        if (iconCode == null)
+                          Flexible(
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 13,
+                              ),
                             ),
-                          ),
-                        ),
+                          )
+                        else
+                          ChainIcon(chainCode: iconCode, size: 26),
                         const SizedBox(width: 2),
                         const Icon(
                           Icons.keyboard_arrow_down,

@@ -1,8 +1,18 @@
 {
     // 命令面板「Tasks: Run Task」或终端菜单「运行任务…」执行。链/主测网由 `GET /api/app/chains` 等接口决定，不再传 EVM_FLAVOR。
+    // 发版：改 pubspec.yaml 的 `version:` 后，如需更新下载页/OTA 清单，单独运行「OTA: 从 pubspec 同步 deploy/ota」；打包再单独选 Android / iOS 任务。
     // 首包/Release 可能很久且 Console 里长时间只显示 assembleRelease 一行，属 Flutter 对 Gradle 的包装默认不刷子步骤；要进度请用「APK（详细日志）」或终端里 `cd android && ./gradlew assembleRelease --info`。
     "version": "2.0.0",
     "tasks": [
+        {
+            "label": "OTA: 从 pubspec 同步 deploy/ota",
+            "type": "shell",
+            "command": "bash",
+            "args": ["-lc", "dart run tools/sync_ota_version.dart"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
+            "problemMatcher": []
+        },
         {
             "label": "Android: APK",
             "type": "shell",
@@ -50,6 +60,16 @@
                 "-lc",
                 "export JAVA_HOME=\"/Applications/Android Studio.app/Contents/jbr/Contents/Home\"; export PATH=\"$JAVA_HOME/bin:$PATH\"; flutter build appbundle"
             ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "presentation": { "reveal": "always", "panel": "shared", "focus": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "iOS: IPA",
+            "type": "shell",
+            "command": "bash",
+            "args": ["-lc", "flutter build ipa"],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "presentation": { "reveal": "always", "panel": "shared", "focus": true },

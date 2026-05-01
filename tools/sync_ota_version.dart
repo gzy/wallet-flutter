@@ -1,8 +1,9 @@
 import 'dart:io';
 
 /// Syncs version info from `pubspec.yaml` into OTA download assets:
-/// - `deploy/ota/index.html` (APP_VERSION_NAME / APP_BUILD_NUMBER)
-/// - `deploy/ota/manifest.plist` (bundle-version)
+/// - `deploy/ota/index.html` (APP_VERSION_NAME / APP_BUILD_NUMBER / APP_RELEASE_DATE 中文年月日=本机当天)
+/// - `deploy/ota/manifest.plist` (`bundle-version` = iOS build / `+` 后缀；
+///   `subtitle` = 营销版本号如 1.0.1，因 Apple 要求 `bundle-version` 必须对齐 CFBundleVersion)
 ///
 /// Usage:
 ///   dart run tools/sync_ota_version.dart
@@ -57,29 +58,44 @@ void main(List<String> args) {
     return;
   }
 
+  final releaseDateZh = _zhDateTodayLocal();
+
   final htmlBefore = indexHtml.readAsStringSync();
-  final htmlAfter = _updateIndexHtml(htmlBefore, name: name, build: build);
+  final htmlAfter = _updateIndexHtml(
+    htmlBefore,
+    name: name,
+    build: build,
+    releaseDateZh: releaseDateZh,
+  );
   if (htmlAfter == htmlBefore) {
     stderr.writeln(
         'No changes made to index.html (constants not found?). Check file format.');
   } else {
     indexHtml.writeAsStringSync(htmlAfter);
-    stdout.writeln('Updated ${indexHtml.path}: $name+$build');
+    stdout.writeln(
+        'Updated ${indexHtml.path}: $name+$build, APP_RELEASE_DATE=$releaseDateZh',
+    );
   }
 
   final manifestBefore = manifest.readAsStringSync();
-  final manifestAfter = _updateManifestPlist(manifestBefore, build: build);
+  final manifestAfter = _updateManifestPlist(manifestBefore, name: name, build: build);
   if (manifestAfter == manifestBefore) {
     stderr.writeln(
-        'No changes made to manifest.plist (bundle-version not found?). Check file format.');
+        'No changes made to manifest.plist (bundle-version/subtitle not found?). Check file format.');
   } else {
     manifest.writeAsStringSync(manifestAfter);
-    stdout.writeln('Updated ${manifest.path}: bundle-version=$build');
+    stdout.writeln(
+        'Updated ${manifest.path}: bundle-version=$build, subtitle=$name',
+    );
   }
 }
 
-String _updateIndexHtml(String input,
-    {required String name, required String build}) {
+String _updateIndexHtml(
+  String input, {
+  required String name,
+  required String build,
+  required String releaseDateZh,
+}) {
   var out = input;
 
   out = out.replaceFirstMapped(
@@ -92,19 +108,37 @@ String _updateIndexHtml(String input,
     (m) => '${m.group(1)}$build${m.group(2)}',
   );
 
+  out = out.replaceFirstMapped(
+    RegExp(r'(\bvar\s+APP_RELEASE_DATE\s*=\s*")[^"]*(";)'),
+    (m) => '${m.group(1)}$releaseDateZh${m.group(2)}',
+  );
+
   return out;
 }
 
-String _updateManifestPlist(String input, {required String build}) {
-  // Replace the value following <key>bundle-version</key> ... <string>...</string>
-  final re = RegExp(
-    r'(<key>\s*bundle-version\s*</key>\s*<string>)[^<]*(</string>)',
-    multiLine: true,
-  );
-  return input.replaceFirstMapped(
-    re,
+/// 本机本地日历日，用于下载页「更新 yyyy年m月d日」。
+String _zhDateTodayLocal() {
+  final n = DateTime.now();
+  return '${n.year}年${n.month}月${n.day}日';
+}
+
+String _updateManifestPlist(String input,
+    {required String name, required String build}) {
+  var out = input.replaceFirstMapped(
+    RegExp(
+      r'(<key>\s*bundle-version\s*</key>\s*<string>)[^<]*(</string>)',
+      multiLine: true,
+    ),
     (m) => '${m.group(1)}$build${m.group(2)}',
   );
+  out = out.replaceFirstMapped(
+    RegExp(
+      r'(<key>\s*subtitle\s*</key>\s*<string>)[^<]*(</string>)',
+      multiLine: true,
+    ),
+    (m) => '${m.group(1)}$name${m.group(2)}',
+  );
+  return out;
 }
 
 bool _isSemverLike(String s) => RegExp(r'^\d+\.\d+\.\d+$').hasMatch(s);
