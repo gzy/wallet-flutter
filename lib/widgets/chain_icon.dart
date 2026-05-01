@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+/// 静态 PNG 映射；新增链图标时从何处取资源见 docs/assets-icon-sources.md。
 class ChainIcon extends StatelessWidget {
   final String chainCode;
   final double size;

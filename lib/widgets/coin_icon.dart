@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+/// 静态 SVG 映射；新增币种时从何处取资源见 docs/assets-icon-sources.md。
 class CoinIcon extends StatelessWidget {
   final String symbol;
   final double size;
