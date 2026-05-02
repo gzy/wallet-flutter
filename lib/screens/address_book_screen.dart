@@ -21,19 +21,39 @@ String _shortAddr(String hex) {
   return '${h.substring(0, 16)}…${h.substring(h.length - 16)}';
 }
 
-String _shortAddrForChain(String addr, {required bool isTron}) {
+String _shortAddrForChain(String addr, ChainKind kind) {
   final a = addr.trim();
-  if (a.isEmpty) return a;
-  if (isTron) {
-    if (a.length <= 18) return a;
-    return '${a.substring(0, 10)}…${a.substring(a.length - 10)}';
+  if (a.isEmpty) {
+    return a;
   }
-  return _shortAddr(a);
+  switch (kind) {
+    case ChainKind.tron:
+    case ChainKind.solana:
+      if (a.length <= 18) {
+        return a;
+      }
+      return '${a.substring(0, 10)}…${a.substring(a.length - 10)}';
+    case ChainKind.evm:
+    case ChainKind.unknown:
+      return _shortAddr(a);
+  }
+}
+
+String _chainKindChipLabel(ChainKind kind) {
+  switch (kind) {
+    case ChainKind.tron:
+      return 'TRON';
+    case ChainKind.solana:
+      return 'SOL';
+    case ChainKind.evm:
+    case ChainKind.unknown:
+      return 'EVM';
+  }
 }
 
 /// 转账页进入的地址簿：最近（成功广播后写入）/ 我的钱包 / 保存的地址（占位）。
 ///
-/// 从「我的钱包」选中一行可 [Navigator.pop] 带回 `0x` 地址填入收款框。
+/// 从「我的钱包」选中一行可 [Navigator.pop] 带回当前链格式地址填入收款框（EVM / TRON / Solana）。
 class AddressBookScreen extends StatefulWidget {
   const AddressBookScreen({
     super.key,
@@ -74,7 +94,6 @@ class _AddressBookScreenState extends State<AddressBookScreen>
   @override
   Widget build(BuildContext context) {
     final kind = ChainRules.kindFromChainQuery(widget.chainQuery);
-    final isTron = kind == ChainKind.tron;
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -131,12 +150,12 @@ class _AddressBookScreenState extends State<AddressBookScreen>
           _RecentTab(
             networkLabel: widget.networkLabel,
             chainQuery: widget.chainQuery,
-            isTron: isTron,
+            chainKind: kind,
             onPickAddress: (hex) => Navigator.of(context).pop<String>(hex),
           ),
           _MyWalletsTab(
             networkLabel: widget.networkLabel,
-            isTron: isTron,
+            chainKind: kind,
             onPickAddress: (hex) => Navigator.of(context).pop<String>(hex),
           ),
           _SavedContactsTab(symbol: widget.symbol),
@@ -150,13 +169,13 @@ class _RecentTab extends StatefulWidget {
   const _RecentTab({
     required this.networkLabel,
     required this.chainQuery,
-    required this.isTron,
+    required this.chainKind,
     required this.onPickAddress,
   });
 
   final String networkLabel;
   final String chainQuery;
-  final bool isTron;
+  final ChainKind chainKind;
   final ValueChanged<String> onPickAddress;
 
   @override
@@ -229,9 +248,7 @@ class _RecentTabState extends State<_RecentTab> {
               ),
               const SizedBox(height: 6),
               Text(
-                widget.isTron
-                    ? '（${widget.networkLabel} · TRON）'
-                    : '（${widget.networkLabel} · EVM）',
+                '（${widget.networkLabel} · ${_chainKindChipLabel(widget.chainKind)}）',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: AppColors.textMuted.withValues(alpha: 0.9),
@@ -251,9 +268,8 @@ class _RecentTabState extends State<_RecentTab> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final r = _items[i];
-        final addr = widget.isTron
-            ? ChainRules.formatAddressForUi(ChainKind.tron, r.address)
-            : ChainRules.formatAddressForUi(ChainKind.evm, r.address);
+        final addr =
+            ChainRules.formatAddressForUi(widget.chainKind, r.address);
         return Material(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
@@ -284,7 +300,7 @@ class _RecentTabState extends State<_RecentTab> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _shortAddrForChain(addr, isTron: widget.isTron),
+                          _shortAddrForChain(addr, widget.chainKind),
                           style: const TextStyle(
                             color: AppColors.textPrimary,
                             fontSize: 15,
@@ -298,7 +314,7 @@ class _RecentTabState extends State<_RecentTab> {
                           runSpacing: 6,
                           children: [
                             _recentChip(widget.networkLabel),
-                            _recentChip(widget.isTron ? 'TRON' : 'EVM'),
+                            _recentChip(_chainKindChipLabel(widget.chainKind)),
                           ],
                         ),
                       ],
@@ -331,12 +347,12 @@ class _RecentTabState extends State<_RecentTab> {
 class _MyWalletsTab extends StatelessWidget {
   const _MyWalletsTab({
     required this.networkLabel,
-    required this.isTron,
+    required this.chainKind,
     required this.onPickAddress,
   });
 
   final String networkLabel;
-  final bool isTron;
+  final ChainKind chainKind;
   final ValueChanged<String> onPickAddress;
 
   @override
@@ -357,7 +373,7 @@ class _MyWalletsTab extends StatelessWidget {
         return _WalletAddressTile(
           wallet: w,
           networkLabel: networkLabel,
-          isTron: isTron,
+          chainKind: chainKind,
           onTap: onPickAddress,
         );
       },
@@ -369,13 +385,13 @@ class _WalletAddressTile extends StatefulWidget {
   const _WalletAddressTile({
     required this.wallet,
     required this.networkLabel,
-    required this.isTron,
+    required this.chainKind,
     required this.onTap,
   });
 
   final StoredWallet wallet;
   final String networkLabel;
-  final bool isTron;
+  final ChainKind chainKind;
   final ValueChanged<String> onTap;
 
   @override
@@ -394,18 +410,34 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
 
   Future<void> _load() async {
     final wc = context.read<WalletController>();
-    final h = widget.isTron
-        ? await wc.readTronAddressForWallet(widget.wallet.id)
-        : await wc.readAddressHexForWallet(widget.wallet.id);
+    final String? h;
+    switch (widget.chainKind) {
+      case ChainKind.tron:
+        h = await wc.readTronAddressForWallet(widget.wallet.id);
+        break;
+      case ChainKind.solana:
+        h = await wc.readSolanaAddressForWallet(widget.wallet.id);
+        break;
+      case ChainKind.evm:
+      case ChainKind.unknown:
+        h = await wc.readAddressHexForWallet(widget.wallet.id);
+        break;
+    }
     if (!mounted) {
       return;
     }
     setState(() {
-      _addr = h != null && h.isNotEmpty
-          ? (widget.isTron
-              ? h.trim()
-              : (h.startsWith('0x') || h.startsWith('0X') ? h : '0x$h'))
-          : null;
+      if (h == null || h.isEmpty) {
+        _addr = null;
+      } else {
+        final t = h.trim();
+        _addr = switch (widget.chainKind) {
+          ChainKind.evm ||
+          ChainKind.unknown =>
+            t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
+          ChainKind.tron || ChainKind.solana => t,
+        };
+      }
       _loading = false;
     });
   }
@@ -470,7 +502,7 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      _shortAddrForChain(addr, isTron: widget.isTron),
+                      _shortAddrForChain(addr, widget.chainKind),
                       style: const TextStyle(
                           color: AppColors.textSecondary,
                           fontSize: 13,
@@ -482,7 +514,7 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
                       runSpacing: 6,
                       children: [
                         _chip(widget.networkLabel),
-                        _chip(widget.isTron ? 'TRON' : 'EVM'),
+                        _chip(_chainKindChipLabel(widget.chainKind)),
                       ],
                     ),
                   ],
