@@ -32,6 +32,10 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于开发调试时与电脑连接，支持热重载与 DevTools。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于扫描收款地址二维码。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择含收款地址的二维码图片。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

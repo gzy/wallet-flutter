@@ -1,4 +1,6 @@
 PODS:
+  - camera_avfoundation (0.0.1):
+    - Flutter
   - DKImagePickerController/Core (4.3.9):
     - DKImagePickerController/ImageDataManager
     - DKImagePickerController/Resource
@@ -35,6 +37,10 @@ PODS:
     - Flutter
   - Flutter (1.0.0)
   - flutter_secure_storage (6.0.0):
+    - Flutter
+  - flutter_zxing (0.0.1):
+    - Flutter
+  - image_picker_ios (0.0.1):
     - Flutter
   - package_info_plus (0.4.5):
     - Flutter
@@ -76,9 +82,12 @@ PODS:
     - Flutter
 
 DEPENDENCIES:
+  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
   - Flutter (from `Flutter`)
   - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
+  - flutter_zxing (from `.symlinks/plugins/flutter_zxing/ios`)
+  - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - share_plus (from `.symlinks/plugins/share_plus/ios`)
@@ -94,12 +103,18 @@ SPEC REPOS:
     - SwiftyGif
 
 EXTERNAL SOURCES:
+  camera_avfoundation:
+    :path: ".symlinks/plugins/camera_avfoundation/ios"
   file_picker:
     :path: ".symlinks/plugins/file_picker/ios"
   Flutter:
     :path: Flutter
   flutter_secure_storage:
     :path: ".symlinks/plugins/flutter_secure_storage/ios"
+  flutter_zxing:
+    :path: ".symlinks/plugins/flutter_zxing/ios"
+  image_picker_ios:
+    :path: ".symlinks/plugins/image_picker_ios/ios"
   package_info_plus:
     :path: ".symlinks/plugins/package_info_plus/ios"
   path_provider_foundation:
@@ -112,11 +127,14 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/url_launcher_ios/ios"
 
 SPEC CHECKSUMS:
+  camera_avfoundation: be3be85408cd4126f250386828e9b1dfa40ab436
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
+  flutter_zxing: e8bcc43bd3056c70c271b732ed94e7a16fd62f93
+  image_picker_ios: 7fe1ff8e34c1790d6fff70a32484959f563a928a
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   path_provider_foundation: 080d55be775b7414fd5a5ef3ac137b97b097e564
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf

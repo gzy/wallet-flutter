@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Release 构建不会合并 debug/profile 中的权限；必须在此声明，否则真机/上架包无法访问网络（常见表现为无法解析主机名）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- API 30+ 包可见性：让系统能解析「用外部浏览器打开 https/http」（url_launcher / coin_detail 等）。 -->
     <queries>

@@ -63,6 +63,8 @@ dependencies:
   bs58: ^1.0.2
   pointycastle: ^3.9.1
   solana: ^0.32.0+1
+  # 使用 ZXing FFI + camera，避免 mobile_scanner/MLKit 在 Apple Silicon arm64 模拟器上无法构建。
+  flutter_zxing: ^2.2.1
 
 dev_dependencies:
   flutter_test:

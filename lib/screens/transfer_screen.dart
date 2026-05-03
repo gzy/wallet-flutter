@@ -15,6 +15,7 @@ import '../services/wallet/wallet_estimate_gas_service.dart';
 import '../widgets/coin_icon.dart';
 import '../widgets/pin_verify_sheet.dart';
 import 'address_book_screen.dart';
+import 'address_qr_scan_screen.dart';
 
 /// 将 RPC 限流、非 JSON 响应等转成可读提示（避免整段 FormatException 糊脸）。
 String _mapTransferSendError(Object e) {
@@ -460,12 +461,58 @@ class _TransferScreenState extends State<TransferScreen> {
                           padding: EdgeInsets.zero,
                           constraints:
                               const BoxConstraints(minWidth: 36, minHeight: 36),
-                          icon: const Icon(Icons.fullscreen,
+                          tooltip: '扫描二维码',
+                          icon: const Icon(Icons.qr_code_scanner,
                               size: 20, color: AppColors.textSecondary),
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('全屏输入功能开发中')),
+                          onPressed: () async {
+                            if (!kIsWeb &&
+                                (defaultTargetPlatform ==
+                                        TargetPlatform.linux ||
+                                    defaultTargetPlatform ==
+                                        TargetPlatform.windows)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    '当前平台不支持相机扫码，请使用 Android、iOS 或 macOS 客户端。',
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
+                            // 避免收款框使用 iOS 系统上下文菜单时，未同步关闭就进相机页，
+                            // 触发 Engine 断言（onDismissSystemContextMenu / no client）。
+                            final navigator = Navigator.of(context);
+                            final messenger = ScaffoldMessenger.of(context);
+                            FocusManager.instance.primaryFocus?.unfocus();
+                            await Future<void>.delayed(
+                                const Duration(milliseconds: 80));
+                            if (!mounted) return;
+                            final scanned = await navigator.push<String>(
+                              MaterialPageRoute<String>(
+                                builder: (_) => const AddressQrScanScreen(),
+                              ),
                             );
+                            if (!mounted) return;
+                            if (scanned == null || scanned.trim().isEmpty) {
+                              return;
+                            }
+                            final field = _normalizeAddrField(
+                                normalizeAddressFromQrPayload(scanned));
+                            if (field.isEmpty) return;
+                            final kind = ChainRules.kindFromChainQuery(
+                                wallet.chainParamForCoin(sel.coin));
+                            final display =
+                                ChainRules.formatAddressForUi(kind, field);
+                            setState(() => _address.text = display);
+                            if (!ChainRules.isValidAddress(kind, display)) {
+                              messenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    '扫描内容可能不是当前网络的收款地址，请核对后再转',
+                                  ),
+                                ),
+                              );
+                            }
                           },
                         ),
                       ],
@@ -896,6 +943,14 @@ class _TransferScreenState extends State<TransferScreen> {
               minLines: isAddressField ? 1 : null,
               maxLines: isAddressField ? 3 : 1,
               inputFormatters: inputFormatters,
+              // iOS 16+ 系统文本菜单与进相机页时序冲突会导致 Framework 断言；强制使用 Flutter 绘制菜单。
+              contextMenuBuilder: isAddressField
+                  ? (BuildContext ctx, EditableTextState editableTextState) {
+                      return AdaptiveTextSelectionToolbar.editableText(
+                        editableTextState: editableTextState,
+                      );
+                    }
+                  : null,
               style:
                   const TextStyle(color: AppColors.textPrimary, fontSize: 16),
               decoration: InputDecoration(
@@ -1384,8 +1439,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   Widget build(BuildContext context) {
     final quote = _gasQuote;
     final tron = _tronEstimate;
-    final tronTitle =
-        _feeUiKind == _TransferFeeUiKind.tron ? '资源消耗' : '矿工费';
+    final tronTitle = _feeUiKind == _TransferFeeUiKind.tron ? '资源消耗' : '矿工费';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1700,14 +1754,18 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                         chain: _chainCode,
                                         address: widget.toAddressNormalized,
                                       ));
-                                      messenger.showSnackBar(
-                                        SnackBar(content: Text('已广播: $hash')),
-                                      );
-                                      await wc.refreshBalances();
                                       if (!host.mounted) {
                                         return;
                                       }
+                                      // 先关掉确认页；余额刷新较慢，若 await 后再 pop 会体感「卡住」。
                                       Navigator.of(host).pop();
+                                      if (!host.mounted) {
+                                        return;
+                                      }
+                                      messenger.showSnackBar(
+                                        SnackBar(content: Text('已广播: $hash')),
+                                      );
+                                      unawaited(wc.refreshBalances());
                                     } catch (e) {
                                       closeLoading();
                                       messenger.showSnackBar(
