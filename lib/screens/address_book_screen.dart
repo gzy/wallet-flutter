@@ -29,6 +29,7 @@ String _shortAddrForChain(String addr, ChainKind kind) {
   switch (kind) {
     case ChainKind.tron:
     case ChainKind.solana:
+    case ChainKind.xrp:
       if (a.length <= 18) {
         return a;
       }
@@ -45,6 +46,8 @@ String _chainKindChipLabel(ChainKind kind) {
       return 'TRON';
     case ChainKind.solana:
       return 'SOL';
+    case ChainKind.xrp:
+      return 'XRP';
     case ChainKind.evm:
     case ChainKind.unknown:
       return 'EVM';
@@ -268,8 +271,7 @@ class _RecentTabState extends State<_RecentTab> {
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final r = _items[i];
-        final addr =
-            ChainRules.formatAddressForUi(widget.chainKind, r.address);
+        final addr = ChainRules.formatAddressForUi(widget.chainKind, r.address);
         return Material(
           color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
@@ -418,6 +420,9 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
       case ChainKind.solana:
         h = await wc.readSolanaAddressForWallet(widget.wallet.id);
         break;
+      case ChainKind.xrp:
+        h = await wc.readXrpAddressForWallet(widget.wallet.id);
+        break;
       case ChainKind.evm:
       case ChainKind.unknown:
         h = await wc.readAddressHexForWallet(widget.wallet.id);
@@ -435,7 +440,7 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
           ChainKind.evm ||
           ChainKind.unknown =>
             t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
-          ChainKind.tron || ChainKind.solana => t,
+          ChainKind.tron || ChainKind.solana || ChainKind.xrp => t,
         };
       }
       _loading = false;

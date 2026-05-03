@@ -3,11 +3,13 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/app_chain_config.dart';
 import 'tron_utils.dart';
+import 'xrp_utils.dart';
 
 enum ChainKind {
   evm,
   tron,
   solana,
+  xrp,
   unknown,
 }
 
@@ -30,6 +32,7 @@ class ChainRules {
     if (t == 'TRON') return ChainKind.tron;
     if (t == 'EVM') return ChainKind.evm;
     if (t == 'SOLANA' || t == 'SOL') return ChainKind.solana;
+    if (t == 'XRP' || t == 'RIPPLE') return ChainKind.xrp;
     return ChainKind.unknown;
   }
 
@@ -38,6 +41,9 @@ class ChainRules {
     if (q.isEmpty) return ChainKind.unknown;
     if (q == 'SOL' || q == 'SOLANA') {
       return ChainKind.solana;
+    }
+    if (q == 'XRP' || q == 'RIPPLE') {
+      return ChainKind.xrp;
     }
     if (q == 'TRX' ||
         q == 'TRON' ||
@@ -66,6 +72,8 @@ class ChainRules {
         return 'EVM';
       case ChainKind.solana:
         return 'SOL';
+      case ChainKind.xrp:
+        return 'XRP';
       case ChainKind.unknown:
         return '—';
     }
@@ -86,6 +94,8 @@ class ChainRules {
         return x.startsWith('0x') ? x : '0x$x';
       case ChainKind.solana:
         return s.replaceAll(RegExp(r'\s+'), '');
+      case ChainKind.xrp:
+        return _stripTron0xPrefix(s).replaceAll(RegExp(r'\s+'), '');
       case ChainKind.unknown:
         return s;
     }
@@ -104,6 +114,8 @@ class ChainRules {
         return s.startsWith('0x') || s.startsWith('0X') ? s : '0x$s';
       case ChainKind.solana:
         return s.replaceAll(RegExp(r'\s+'), '');
+      case ChainKind.xrp:
+        return _stripTron0xPrefix(s).replaceAll(RegExp(r'\s+'), '');
       case ChainKind.unknown:
         return s;
     }
@@ -129,6 +141,8 @@ class ChainRules {
         return RegExp(r'^0x[a-fA-F0-9]{40}$').hasMatch(x);
       case ChainKind.solana:
         return _isValidSolanaAddress(s);
+      case ChainKind.xrp:
+        return isValidXrpClassicAddress(s);
       case ChainKind.unknown:
         if (kDebugMode) {
           debugPrint('ChainRules.isValidAddress: unknown kind for "$s"');

@@ -30,12 +30,14 @@ class WalletCoinList extends StatelessWidget {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => CoinDetailScreen(coin: coin)),
+                  MaterialPageRoute(
+                      builder: (context) => CoinDetailScreen(coin: coin)),
                 );
               },
               child: Container(
                 margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(10),
@@ -69,7 +71,9 @@ class WalletCoinList extends StatelessWidget {
                                 Flexible(
                                   child: Text(
                                     '(${coin.network})',
-                                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                                    style: const TextStyle(
+                                        color: AppColors.textSecondary,
+                                        fontSize: 14),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -81,14 +85,17 @@ class WalletCoinList extends StatelessWidget {
                           coin.price == 0
                               ? const Text(
                                   '未接入行情',
-                                  style: TextStyle(color: AppColors.textMuted, fontSize: 14),
+                                  style: TextStyle(
+                                      color: AppColors.textMuted, fontSize: 14),
                                 )
                               : Row(
                                   children: [
                                     Flexible(
                                       child: Text(
                                         '\$${coin.price.toStringAsFixed(2)}',
-                                        style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                                        style: const TextStyle(
+                                            color: AppColors.textPrimary,
+                                            fontSize: 14),
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                       ),
@@ -131,7 +138,8 @@ class WalletCoinList extends StatelessWidget {
                           const SizedBox(height: 4),
                           Text(
                             '\$${coin.balanceUSD.toStringAsFixed(coin.balanceUSD == 0 ? 0 : 4)}',
-                            style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                            style: const TextStyle(
+                                color: AppColors.textPrimary, fontSize: 14),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.end,

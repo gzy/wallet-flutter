@@ -42,6 +42,51 @@ String _formatMinerFee(double? fee, String? feeCrypto) {
   return '$s $sym';
 }
 
+bool _trxDetailAlmostZero(double? x) => x == null || x.abs() < 1e-12;
+
+String _fmtTrxDetailAmount(double? v) {
+  if (_trxDetailAlmostZero(v)) {
+    return '—';
+  }
+  final d = v!;
+  return d
+      .toStringAsFixed(6)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
+}
+
+String? _tronBandwidthLine(ChainTransactionVo d) {
+  final bw = d.tronBandwidth ?? 0;
+  final fee = d.tronBandwidthConsumeTrx;
+  if (bw <= 0 && _trxDetailAlmostZero(fee)) {
+    return null;
+  }
+  final parts = <String>[];
+  if (bw > 0) {
+    parts.add('$bw');
+  }
+  if (!_trxDetailAlmostZero(fee)) {
+    parts.add('折 TRX ${_fmtTrxDetailAmount(fee)}');
+  }
+  return parts.join(' · ');
+}
+
+String? _tronEnergyLine(ChainTransactionVo d) {
+  final en = d.tronEnergy ?? 0;
+  final fee = d.tronEnergyConsumeTrx;
+  if (en <= 0 && _trxDetailAlmostZero(fee)) {
+    return null;
+  }
+  final parts = <String>[];
+  if (en > 0) {
+    parts.add('$en');
+  }
+  if (!_trxDetailAlmostZero(fee)) {
+    parts.add('折 TRX ${_fmtTrxDetailAmount(fee)}');
+  }
+  return parts.join(' · ');
+}
+
 String _formatFullDateTime(DateTime? t) {
   if (t == null) {
     return '—';
@@ -57,7 +102,7 @@ String _midTruncHash(String hash, ChainKind kind) {
     ChainKind.evm ||
     ChainKind.unknown =>
       raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
-    ChainKind.tron || ChainKind.solana => raw,
+    ChainKind.tron || ChainKind.solana || ChainKind.xrp => raw,
   };
   if (h.length <= 22) {
     return h;
@@ -103,6 +148,7 @@ String _normWalletAddr(String? raw, ChainKind kind) {
   switch (kind) {
     case ChainKind.tron:
     case ChainKind.solana:
+    case ChainKind.xrp:
       return s;
     case ChainKind.evm:
     case ChainKind.unknown:
@@ -122,6 +168,7 @@ String _normAddr(String? raw, ChainKind kind) {
   switch (kind) {
     case ChainKind.tron:
     case ChainKind.solana:
+    case ChainKind.xrp:
       return s;
     case ChainKind.evm:
     case ChainKind.unknown:
@@ -197,7 +244,7 @@ Uri? _txExplorerUri(ChainTransactionVo detail, CoinData coin, String rawHash) {
     ChainKind.evm ||
     ChainKind.unknown =>
       raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
-    ChainKind.tron || ChainKind.solana => raw,
+    ChainKind.tron || ChainKind.solana || ChainKind.xrp => raw,
   };
   final p = coin.txUrlPrefix?.trim();
   if (p == null || p.isEmpty) {
@@ -336,7 +383,11 @@ class WalletTransactionDetailScreen extends StatelessWidget {
                   const SizedBox(height: 20),
                   _amountCard(sign, amtStr, sym),
                   const SizedBox(height: 12),
-                  _statusCard(stLabel, stColor),
+                  _statusCard(
+                    stLabel,
+                    stColor,
+                    chainKind: chainKind,
+                  ),
                   const SizedBox(height: 12),
                   _addressCard(context, from, to),
                   const SizedBox(height: 12),
@@ -391,6 +442,49 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     );
   }
 
+  /// TRON 详情：带宽 / 能量 / 质押能量 / TRX 消耗（与 estimateGas 类字段对齐）。
+  List<Widget> _tronResourceStatusRows() {
+    final d = detail;
+    final out = <Widget>[];
+    void push(String label, String value) {
+      if (out.isNotEmpty) {
+        out.add(const SizedBox(height: 12));
+      }
+      out.add(_kvRow(label, value));
+    }
+
+    final bwLine = _tronBandwidthLine(d);
+    if (bwLine != null) {
+      push('带宽', bwLine);
+    }
+    final enLine = _tronEnergyLine(d);
+    if (enLine != null) {
+      push('能量', enLine);
+    }
+    final staked = d.tronStakedEnergy ?? 0;
+    if (staked > 0) {
+      push('质押能量', '$staked');
+    }
+
+    final totalTrx = (d.tronBandwidthConsumeTrx ?? 0) +
+        (d.tronEnergyConsumeTrx ?? 0) +
+        (d.tronOtherTrxConsume ?? 0);
+    if (!_trxDetailAlmostZero(totalTrx)) {
+      push('TRX 消耗', '≈ ${_fmtTrxDetailAmount(totalTrx)} TRX');
+    } else if (!_trxDetailAlmostZero(d.transactionFee)) {
+      final sym = (d.feeCrypto ?? '').trim();
+      final isTrx = sym.isEmpty || sym.toUpperCase() == 'TRX';
+      if (isTrx) {
+        push('TRX 消耗', _formatMinerFee(d.transactionFee, d.feeCrypto));
+      }
+    }
+
+    if (out.isEmpty) {
+      push('资源消耗', '—');
+    }
+    return out;
+  }
+
   Widget _amountCard(String sign, String amt, String sym) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
@@ -430,7 +524,11 @@ class WalletTransactionDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _statusCard(String stLabel, Color stColor) {
+  Widget _statusCard(
+    String stLabel,
+    Color stColor, {
+    required ChainKind chainKind,
+  }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
@@ -444,11 +542,17 @@ class WalletTransactionDetailScreen extends StatelessWidget {
             stLabel,
             valueColor: stColor,
           ),
-          const SizedBox(height: 12),
-          _kvRow(
-            '矿工费',
-            _formatMinerFee(detail.transactionFee, detail.feeCrypto),
-          ),
+          if (chainKind == ChainKind.evm) ...[
+            const SizedBox(height: 12),
+            _kvRow(
+              '矿工费',
+              _formatMinerFee(detail.transactionFee, detail.feeCrypto),
+            ),
+          ],
+          if (chainKind == ChainKind.tron) ...[
+            const SizedBox(height: 12),
+            ..._tronResourceStatusRows(),
+          ],
           const SizedBox(height: 12),
           _kvRow('时间', _formatFullDateTime(detail.transactionTime)),
         ],

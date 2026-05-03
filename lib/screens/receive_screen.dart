@@ -131,6 +131,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final evmAddress = wallet.addressHex;
     final tronAddress = wallet.tronAddress;
     final solanaAddress = wallet.solanaAddress;
+    final xrpAddress = wallet.xrpAddress;
     if (!wallet.hasWallet) {
       return Scaffold(
         backgroundColor: AppColors.background,
@@ -181,6 +182,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final address = switch (kind) {
       ChainKind.tron => tronAddress,
       ChainKind.solana => solanaAddress,
+      ChainKind.xrp => xrpAddress,
       ChainKind.evm || ChainKind.unknown => evmAddress,
     };
     if (address == null || address.isEmpty) {

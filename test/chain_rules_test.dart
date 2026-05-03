@@ -9,12 +9,16 @@ void main() {
       expect(ChainRules.kindFromChainQuery('tron'), ChainKind.tron);
       expect(ChainRules.kindFromChainQuery('TRON_MAINNET'), ChainKind.tron);
       expect(ChainRules.kindFromChainQuery('ETH'), ChainKind.evm);
+      expect(ChainRules.kindFromChainQuery('SOL'), ChainKind.solana);
+      expect(ChainRules.kindFromChainQuery('XRP'), ChainKind.xrp);
+      expect(ChainRules.kindFromChainQuery('ripple'), ChainKind.xrp);
       expect(ChainRules.kindFromChainQuery(''), ChainKind.unknown);
     });
 
     test('kindFromChainType', () {
       expect(ChainRules.kindFromChainType('TRON'), ChainKind.tron);
       expect(ChainRules.kindFromChainType('EVM'), ChainKind.evm);
+      expect(ChainRules.kindFromChainType('XRP'), ChainKind.xrp);
       expect(ChainRules.kindFromChainType(null), ChainKind.unknown);
     });
   });
@@ -66,6 +70,7 @@ void main() {
     test('badgeLabel', () {
       expect(ChainRules.badgeLabel(ChainKind.tron), 'TRON');
       expect(ChainRules.badgeLabel(ChainKind.evm), 'EVM');
+      expect(ChainRules.badgeLabel(ChainKind.xrp), 'XRP');
       expect(ChainRules.badgeLabel(ChainKind.unknown), '—');
     });
   });

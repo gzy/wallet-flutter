@@ -65,6 +65,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.0.1"
+  bip39:
+    dependency: transitive
+    description:
+      name: bip39
+      sha256: de1ee27ebe7d96b84bb3a04a4132a0a3007dcdd5ad27dd14aa87a29d97c45edc
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.0.6"
   bip39_plus:
     dependency: "direct main"
     description:
@@ -81,6 +89,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.1.1"
+  borsh_annotation:
+    dependency: transitive
+    description:
+      name: borsh_annotation
+      sha256: dc73a7fdc6fe4505535657daf8ab3cebe382311fae63a0faaf9315ea1bc30bff
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.3.2"
   bs58:
     dependency: "direct main"
     description:
@@ -209,6 +225,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "3.0.7"
+  cryptography:
+    dependency: transitive
+    description:
+      name: cryptography
+      sha256: "3eda3029d34ec9095a27a198ac9785630fe525c0eb6a49f3d575272f8e792ef0"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "2.9.0"
   cupertino_icons:
     dependency: "direct main"
     description:
@@ -432,6 +456,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  freezed_annotation:
+    dependency: transitive
+    description:
+      name: freezed_annotation
+      sha256: "7294967ff0a6d98638e7acb774aac3af2550777accd8149c90af5b014e6d44d8"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "3.1.0"
   glob:
     dependency: transitive
     description:
@@ -729,7 +761,7 @@ packages:
     source: hosted
     version: "2.1.8"
   pointycastle:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: pointycastle
       sha256: "4be0097fcf3fd3e8449e53730c631200ebc7b88016acecab2b0da2f0149222fe"
@@ -853,6 +885,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  solana:
+    dependency: "direct main"
+    description:
+      name: solana
+      sha256: c465bf2f18301fb652cf80ef41a47f687109823ea63f6f176c5091bbf04c12f7
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.32.0+1"
   source_gen:
     dependency: transitive
     description:

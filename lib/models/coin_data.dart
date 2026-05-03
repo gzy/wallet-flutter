@@ -5,12 +5,16 @@ class CoinData {
   final String name;
   final String icon;
   final String? network;
+
   /// EVM 链 ID；非链上资产为 null
   final int? chainId;
+
   /// 与 `/api/app/wallet/*` 使用的 `chain` 查询参数一致（优先后端的 `chainCode`）。
   final String? walletApiChainQuery;
+
   /// 区块浏览器交易页前缀，如 `https://sepolia.etherscan.io/tx/`；来自 `GET /api/app/chains`。
   final String? txUrlPrefix;
+
   /// 区块浏览器地址页前缀，如 `https://sepolia.etherscan.io/address/`。
   final String? addressUrlPrefix;
   final double price;
@@ -58,7 +62,9 @@ class CoinData {
       name: j['name']?.toString() ?? '',
       icon: j['icon']?.toString() ?? '',
       network: j['network']?.toString(),
-      chainId: (j['chainId'] is int) ? j['chainId'] as int : int.tryParse(j['chainId']?.toString() ?? ''),
+      chainId: (j['chainId'] is int)
+          ? j['chainId'] as int
+          : int.tryParse(j['chainId']?.toString() ?? ''),
       walletApiChainQuery: j['walletApiChainQuery']?.toString(),
       txUrlPrefix: j['txUrlPrefix']?.toString(),
       addressUrlPrefix: j['addressUrlPrefix']?.toString(),

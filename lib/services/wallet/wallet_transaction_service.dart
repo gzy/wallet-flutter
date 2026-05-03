@@ -5,9 +5,9 @@ import 'package:http/http.dart' as http;
 
 import '../../models/chain_transaction_vo.dart';
 import '../http/http_clients.dart';
-import '../market/app_price_service.dart' show kMarketApiBase;
+import 'wallet_api_paths.dart';
 
-/// 钱包交易：`GET /api/app/wallet/transactionHistory`、`transactionDetail`（query 传参）；`chain` 一般为 `chainCode`（无则 `chainId`）。
+/// 钱包交易：`GET …/transactionHistory`、`transactionDetail`；SOL/XRP 为 **`address`+`crypto`** / **`txHash`+`crypto`**；wallet 仍带 `chain`（EVM/TRON 不变）。
 class WalletTransactionService {
   WalletTransactionService({http.Client? httpClient})
       : _httpClient = httpClient ?? _defaultClient();
@@ -18,40 +18,12 @@ class WalletTransactionService {
     return HttpClients.create(logName: 'WalletTx', maxLogBodyLength: 16000);
   }
 
-  static Uri _detailUri({
-    required String txHash,
-    required String chain,
-    required String crypto,
-  }) {
-    return Uri.parse('$kMarketApiBase/api/app/wallet/transactionDetail')
-        .replace(queryParameters: {
-      'txHash': txHash,
-      'chain': chain,
-      'crypto': crypto,
-    });
-  }
-
-  static Uri _historyUri({
-    required String address,
-    required String chain,
-    String? coin,
-  }) {
-    final q = <String, String>{
-      'address': address,
-      'chain': chain,
-    };
-    if (coin != null && coin.isNotEmpty) {
-      q['coin'] = coin;
-    }
-    return Uri.parse('$kMarketApiBase/api/app/wallet/transactionHistory')
-        .replace(queryParameters: q);
-  }
-
   /// `code == 0` 时返回 `data` 列表；HTTP/解析/`code != 0` 时返回 `null`（由调用方决定是否回退 Blockscout）。
   Future<List<ChainTransactionVo>?> fetchTransactionHistory({
     required String address,
     required String chain,
     String? coin,
+    String? chainType,
     String? xToken,
   }) async {
     try {
@@ -61,14 +33,20 @@ class WalletTransactionService {
       }
       final res = await _httpClient
           .get(
-            _historyUri(address: address, chain: chain, coin: coin),
+            WalletApiPaths.transactionHistory(
+              address: address,
+              chain: chain,
+              coin: coin,
+              chainType: chainType,
+            ),
             headers: headers,
           )
           .timeout(const Duration(seconds: 25));
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
         if (kDebugMode) {
-          debugPrint('WalletTransactionService: history HTTP ${res.statusCode}');
+          debugPrint(
+              'WalletTransactionService: history HTTP ${res.statusCode}');
         }
         return null;
       }
@@ -106,6 +84,7 @@ class WalletTransactionService {
     required String txHash,
     required String chain,
     required String crypto,
+    String? chainType,
     String? xToken,
   }) async {
     try {
@@ -115,7 +94,12 @@ class WalletTransactionService {
       }
       final res = await _httpClient
           .get(
-            _detailUri(txHash: txHash, chain: chain, crypto: crypto),
+            WalletApiPaths.transactionDetail(
+              txHash: txHash,
+              chain: chain,
+              crypto: crypto,
+              chainType: chainType,
+            ),
             headers: headers,
           )
           .timeout(const Duration(seconds: 20));

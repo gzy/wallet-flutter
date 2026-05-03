@@ -322,6 +322,7 @@ class _TransferScreenState extends State<TransferScreen> {
     final fromAddr = switch (sendKind) {
       ChainKind.tron => wallet.tronAddress,
       ChainKind.solana => wallet.solanaAddress,
+      ChainKind.xrp => wallet.xrpAddress,
       ChainKind.evm || ChainKind.unknown => wallet.addressHex,
     };
     final walletName = wallet.activeWallet?.name.trim();
@@ -791,14 +792,6 @@ class _TransferScreenState extends State<TransferScreen> {
       orElse: () => wallet.backendChains.first,
     );
     final kind = ChainRules.kindForAppChain(chainCfg);
-    if (kind == ChainKind.solana) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Solana 链转出尚未开放，请等待后续版本'),
-        ),
-      );
-      return;
-    }
     final isTron = kind == ChainKind.tron;
     final from = (isTron ? wallet.tronAddress : wallet.addressHex) ?? '';
     final toNorm = _normalizeAddrField(_address.text);
@@ -807,6 +800,7 @@ class _TransferScreenState extends State<TransferScreen> {
       final invalidMsg = switch (kind) {
         ChainKind.tron => '收款地址格式无效，请使用 Tron 的 T... 地址',
         ChainKind.solana => '收款地址格式无效，请使用 Solana Base58 地址',
+        ChainKind.xrp => '收款地址格式无效，请使用 XRP 的 r... 地址',
         ChainKind.evm ||
         ChainKind.unknown =>
           '收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址',
@@ -1030,6 +1024,9 @@ Widget _transferKvRowCompact(String left, String right) {
   );
 }
 
+/// 确认弹窗内手续费展示：EVM（Gwei 档位）、TRON（资源）、SOL/XRP 等专用链（无矿工费档位）。
+enum _TransferFeeUiKind { evm, tron, dedicated }
+
 class _TransferConfirmSheet extends StatefulWidget {
   const _TransferConfirmSheet({
     required this.hostContext,
@@ -1068,7 +1065,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
 
   WalletGasPriceService get _gasSvc => WalletGasPriceService();
   WalletEstimateGasService get _estimateGasSvc => WalletEstimateGasService();
-  bool? _isTron;
+  _TransferFeeUiKind _feeUiKind = _TransferFeeUiKind.evm;
 
   String get _chainCode {
     // 与 `/api/app/wallet/gasPrice`、`estimateGas`、`createTransaction` 的 `chain` 参数一致（优先后端 chainCode）。
@@ -1076,6 +1073,18 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   }
 
   bool get _feeLoading => _priceLoading || _limitLoading;
+
+  _TransferFeeUiKind _resolveFeeUiKind() {
+    final chainCfg = widget.wallet.backendChains.firstWhere(
+      (c) => c.walletApiChainQuery == _chainCode,
+      orElse: () => widget.wallet.backendChains.first,
+    );
+    return switch (ChainRules.kindForAppChain(chainCfg)) {
+      ChainKind.tron => _TransferFeeUiKind.tron,
+      ChainKind.solana || ChainKind.xrp => _TransferFeeUiKind.dedicated,
+      _ => _TransferFeeUiKind.evm,
+    };
+  }
 
   static Map<String, dynamic>? _parseTronEstimate(Object? data) {
     if (data is! Map) return null;
@@ -1136,18 +1145,18 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       orElse: () => widget.wallet.backendChains.first,
     );
     final chainKind = ChainRules.kindForAppChain(chainCfg);
-    if (chainKind == ChainKind.solana) {
+    if (chainKind == ChainKind.solana || chainKind == ChainKind.xrp) {
       if (!mounted) {
         return;
       }
       setState(() {
+        _feeUiKind = _TransferFeeUiKind.dedicated;
         _priceLoading = false;
         _limitLoading = false;
       });
       return;
     }
     final isTron = chainKind == ChainKind.tron;
-    _isTron ??= isTron;
     if (isTron) {
       // TRON 不展示矿工费（能量/带宽模型），且不应阻塞“转出”按钮。
       // 但仍需调用 estimateGasV2（优先 V2，失败回退旧版）以适配后端新接口与未来展示/校验需求。
@@ -1175,6 +1184,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       }
       if (!mounted) return;
       setState(() {
+        _feeUiKind = _TransferFeeUiKind.tron;
         _gasQuote = null;
         _gasLimit = fromApi; // TRON 当前不使用 gasLimit 展示，但保留兼容
         _tronEstimate = tronM;
@@ -1187,6 +1197,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     final owner = switch (chainKind) {
       ChainKind.tron => widget.wallet.tronAddress,
       ChainKind.solana => widget.wallet.solanaAddress,
+      ChainKind.xrp => widget.wallet.xrpAddress,
       ChainKind.evm || ChainKind.unknown => widget.wallet.addressHex,
     };
     final amount = double.tryParse(widget.amountStr);
@@ -1213,6 +1224,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     if (!mounted) return;
 
     setState(() {
+      _feeUiKind = _TransferFeeUiKind.evm;
       _gasQuote = q;
       _priceLoading = false;
       _gasLimit = fromApi;
@@ -1224,6 +1236,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   @override
   void initState() {
     super.initState();
+    _feeUiKind = _resolveFeeUiKind();
     unawaited(_refreshFeeData(isInitial: true));
     _gasRefreshTimer = Timer.periodic(_gasQuoteRefreshInterval, (_) {
       unawaited(_refreshFeeData(isInitial: false));
@@ -1240,7 +1253,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     if (_feeLoading) {
       return '正在获取矿工费…';
     }
-    if (_isTron == true) {
+    if (_feeUiKind == _TransferFeeUiKind.tron) {
       final m = _tronEstimate;
       if (m == null) return '—';
       final total = _asDecimal(m['bandwidthConsume']) +
@@ -1279,7 +1292,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   }
 
   String _usdForLevel(WalletGasPriceQuote? quote, String level) {
-    if (_isTron == true) {
+    if (_feeUiKind == _TransferFeeUiKind.tron) {
       return '—';
     }
     if (quote == null || widget.sel.priceUsd <= 0) {
@@ -1311,7 +1324,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   ) {
     final isActive = _gasLevel == level;
     final gweiStr = quote == null ? '—' : _gweiForLevel(quote, level);
-    final unit = _isTron == true ? '' : ' Gwei';
+    final unit = _feeUiKind == _TransferFeeUiKind.tron ? '' : ' Gwei';
     return InkWell(
       onTap: _feeLoading
           ? null
@@ -1371,7 +1384,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   Widget build(BuildContext context) {
     final quote = _gasQuote;
     final tron = _tronEstimate;
-    final tronTitle = _isTron == true ? '资源消耗' : '矿工费';
+    final tronTitle =
+        _feeUiKind == _TransferFeeUiKind.tron ? '资源消耗' : '矿工费';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1426,7 +1440,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
             const SizedBox(height: 8),
             _transferConfirmCard(
               children: [
-                if (_isTron == true) ...[
+                if (_feeUiKind == _TransferFeeUiKind.tron) ...[
                   if (tron != null) ...[
                     // Resources 行：按规则动态拼接
                     Builder(builder: (context) {
@@ -1481,6 +1495,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                   ] else ...[
                     _transferKvRowCompact('Resources', '—'),
                   ],
+                ] else if (_feeUiKind == _TransferFeeUiKind.dedicated) ...[
+                  _transferKvRowCompact('手续费', '以链上实际消耗为准'),
                 ] else ...[
                   _transferKvRow(tronTitle, _gasFeeTitle(quote)),
                   const SizedBox(height: 10),
@@ -1597,6 +1613,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                         widget.wallet.tronAddress,
                                       ChainKind.solana =>
                                         widget.wallet.solanaAddress,
+                                      ChainKind.xrp => widget.wallet.xrpAddress,
                                       ChainKind.evm ||
                                       ChainKind.unknown =>
                                         widget.wallet.addressHex,

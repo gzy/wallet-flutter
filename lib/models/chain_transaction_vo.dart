@@ -19,6 +19,12 @@ class ChainTransactionVo {
     this.feeCrypto,
     this.txLink,
     this.addressLinkPrefix,
+    this.tronBandwidth,
+    this.tronEnergy,
+    this.tronStakedEnergy,
+    this.tronBandwidthConsumeTrx,
+    this.tronEnergyConsumeTrx,
+    this.tronOtherTrxConsume,
   });
 
   final String? crypto;
@@ -40,6 +46,24 @@ class ChainTransactionVo {
   final String? txLink;
   final String? addressLinkPrefix;
 
+  /// TRON：带宽点数（与 estimateGas 等接口字段 `bandwidth` 对齐）。
+  final int? tronBandwidth;
+
+  /// TRON：能量点数（`energy`）。
+  final int? tronEnergy;
+
+  /// TRON：质押能量（`stakedEnergy`）。
+  final int? tronStakedEnergy;
+
+  /// TRON：带宽折 TRX 消耗（`bandwidthConsume` / `bandwidth_consume`）。
+  final double? tronBandwidthConsumeTrx;
+
+  /// TRON：能量折 TRX 消耗（`energyConsume` / `energy_consume`）。
+  final double? tronEnergyConsumeTrx;
+
+  /// TRON：其他 TRX 消耗（`otherTRXConsume` / `other_trx_consume`）。
+  final double? tronOtherTrxConsume;
+
   /// 列表接口里 [includeDetail] 为 `Y` 等真值时，字段已够展示详情，无需再调 `transactionDetail`。
   bool get walletHistoryRowIncludesDetail {
     final v = includeDetail?.trim().toUpperCase();
@@ -52,6 +76,7 @@ class ChainTransactionVo {
     if (raw != null) {
       time = _parseTransactionTime(raw.toString());
     }
+    final tron = _tronFieldSource(json);
     return ChainTransactionVo(
       crypto: json['crypto']?.toString(),
       chain: json['chain']?.toString(),
@@ -71,6 +96,15 @@ class ChainTransactionVo {
       feeCrypto: json['feeCrypto']?.toString(),
       txLink: json['txLink']?.toString(),
       addressLinkPrefix: json['addressLinkPrefix']?.toString(),
+      tronBandwidth: _asInt(_tronPick(tron, const ['bandwidth', 'tronBandwidth'])),
+      tronEnergy: _asInt(_tronPick(tron, const ['energy', 'tronEnergy'])),
+      tronStakedEnergy: _asInt(_tronPick(tron, const ['stakedEnergy', 'staked_energy'])),
+      tronBandwidthConsumeTrx:
+          _asDouble(_tronPick(tron, const ['bandwidthConsume', 'bandwidth_consume'])),
+      tronEnergyConsumeTrx:
+          _asDouble(_tronPick(tron, const ['energyConsume', 'energy_consume'])),
+      tronOtherTrxConsume:
+          _asDouble(_tronPick(tron, const ['otherTRXConsume', 'other_trx_consume'])),
     );
   }
 
@@ -93,7 +127,58 @@ class ChainTransactionVo {
         'feeCrypto': feeCrypto,
         'txLink': txLink,
         'addressLinkPrefix': addressLinkPrefix,
+        'tronBandwidth': tronBandwidth,
+        'tronEnergy': tronEnergy,
+        'tronStakedEnergy': tronStakedEnergy,
+        'tronBandwidthConsumeTrx': tronBandwidthConsumeTrx,
+        'tronEnergyConsumeTrx': tronEnergyConsumeTrx,
+        'tronOtherTrxConsume': tronOtherTrxConsume,
       };
+}
+
+/// 合并根对象与常见嵌套对象，便于读取 TRON 资源字段。
+Map<String, dynamic> _tronFieldSource(Map<String, dynamic> json) {
+  final out = Map<String, dynamic>.from(json);
+  for (final nest in [
+    'tronResource',
+    'resourceFee',
+    'feeDetail',
+    'estimateFee',
+    'tron',
+    'fee',
+  ]) {
+    final v = json[nest];
+    if (v is Map) {
+      out.addAll(Map<String, dynamic>.from(v));
+    }
+  }
+  return out;
+}
+
+Object? _tronPick(Map<String, dynamic> src, List<String> keys) {
+  for (final k in keys) {
+    final v = src[k];
+    if (v != null) {
+      return v;
+    }
+  }
+  return null;
+}
+
+double? _asDouble(Object? v) {
+  if (v == null) {
+    return null;
+  }
+  if (v is double) {
+    return v;
+  }
+  if (v is int) {
+    return v.toDouble();
+  }
+  if (v is num) {
+    return v.toDouble();
+  }
+  return double.tryParse(v.toString());
 }
 
 /// 支持 ISO8601 及常见后端格式 `yyyy-MM-dd HH:mm:ss`（无时区时按本地日历解析）。

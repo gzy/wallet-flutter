@@ -58,6 +58,8 @@ String? _walletAddrForKind(WalletController wc, ChainKind kind) {
       return wc.tronAddress;
     case ChainKind.solana:
       return wc.solanaAddress;
+    case ChainKind.xrp:
+      return wc.xrpAddress;
     case ChainKind.evm:
     case ChainKind.unknown:
       return wc.addressHex;
@@ -156,6 +158,9 @@ String _coinNetworkSubtitle(CoinData live) {
   }
   if (kind == ChainKind.solana) {
     return 'SOL';
+  }
+  if (kind == ChainKind.xrp) {
+    return 'XRP';
   }
   return 'EVM';
 }
@@ -326,6 +331,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (chain.isEmpty) {
         throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
       }
+      final chainType = _appChainCfgForParam(wc, chain)?.chainType;
       final kind = _kindForCoin(wc, live);
       final raw = _walletAddrForKind(wc, kind) ?? '';
       final address =
@@ -358,6 +364,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         address: address,
         chain: chain,
         coin: live.symbol,
+        chainType: chainType,
       );
       if (!mounted || gen != _txRequestGen) {
         return;
@@ -444,7 +451,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ChainKind.evm ||
       ChainKind.unknown =>
         t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
-      ChainKind.tron || ChainKind.solana => t,
+      ChainKind.tron || ChainKind.solana || ChainKind.xrp => t,
     };
     final link = _joinExplorerUrl(live.txUrlPrefix, h);
     if (link == null) {
@@ -502,18 +509,20 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ),
     );
     final chain = wc.chainParamForCoin(live);
+    final chainType = _appChainCfgForParam(wc, chain)?.chainType;
     final kind = _kindForCoin(wc, live);
     final rawH = rawTxHash.trim();
     final h = switch (kind) {
       ChainKind.evm ||
       ChainKind.unknown =>
         rawH.startsWith('0x') || rawH.startsWith('0X') ? rawH : '0x$rawH',
-      ChainKind.tron || ChainKind.solana => rawH,
+      ChainKind.tron || ChainKind.solana || ChainKind.xrp => rawH,
     };
     final detail = await _txDetailService.fetchTransactionDetail(
       txHash: h,
       chain: chain,
       crypto: live.symbol,
+      chainType: chainType,
     );
     if (!mounted) {
       return;
@@ -668,11 +677,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                       Icon(
                                         Icons.copy,
                                         size: 13,
-                                        color: (walletAddr?.trim().isEmpty ??
-                                                true)
-                                            ? AppColors.textMuted
-                                                .withValues(alpha: 0.35)
-                                            : AppColors.textMuted,
+                                        color:
+                                            (walletAddr?.trim().isEmpty ?? true)
+                                                ? AppColors.textMuted
+                                                    .withValues(alpha: 0.35)
+                                                : AppColors.textMuted,
                                       ),
                                     ],
                                   ),
@@ -1000,7 +1009,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         _txCompositeEmpty() &&
                         (wc.addressHex != null ||
                             wc.tronAddress != null ||
-                            wc.solanaAddress != null))
+                            wc.solanaAddress != null ||
+                            wc.xrpAddress != null))
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -1451,6 +1461,7 @@ class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
                         )) {
                           ChainKind.solana => kSolanaDefaultDerivationPath,
                           ChainKind.tron => kTronDefaultDerivationPath,
+                          ChainKind.xrp => kXrpDefaultDerivationPath,
                           ChainKind.evm ||
                           ChainKind.unknown =>
                             kEthDefaultDerivationPath,

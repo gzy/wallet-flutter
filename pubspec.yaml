@@ -17,9 +17,9 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 #
-# 发版：只改本行 version（如 1.0.2+4）。需更新 OTA 页/清单时单独跑任务「OTA: 从 pubspec 同步 deploy/ota」；再单独跑 Android / iOS 打包任务。
+# 发版：只改本行 version（如 1.0.2+4）。可跑 VS Code 任务「Flutter: 版本号同步到 Android/iOS（config-only）」刷新双端构建配置；OTA 页/清单另跑「OTA: 从 pubspec 同步 deploy/ota」；再跑 Android / iOS 打包任务。
 # 双端版本号均来自此处，勿在 Xcode/Gradle 里手改覆盖。详见 .vscode/tasks.json。
-version: 1.0.1+4
+version: 1.0.1+5
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -61,6 +61,8 @@ dependencies:
   share_plus: ^10.1.4
   ed25519_hd_key: ^2.3.0
   bs58: ^1.0.2
+  pointycastle: ^3.9.1
+  solana: ^0.32.0+1
 
 dev_dependencies:
   flutter_test:

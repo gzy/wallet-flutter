@@ -20,6 +20,7 @@ import '../services/wallet/chain_rules.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
+import '../services/wallet/solana_backend_transfer.dart';
 import '../services/wallet/wallet_transfer_api_service.dart';
 import '../services/wallet/tron_utils.dart';
 
@@ -58,6 +59,7 @@ class WalletController extends ChangeNotifier {
   Uint8List? _tronPrivateKey;
   String? _tronAddress;
   String? _solanaAddress;
+  String? _xrpAddress;
   bool _backedUp = false;
   bool _loading = false;
 
@@ -83,6 +85,7 @@ class WalletController extends ChangeNotifier {
   String? get addressHex => _addressHex;
   String? get tronAddress => _tronAddress;
   String? get solanaAddress => _solanaAddress;
+  String? get xrpAddress => _xrpAddress;
   EthereumAddress? get address =>
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
@@ -312,6 +315,7 @@ class WalletController extends ChangeNotifier {
     final ownerAddress = switch (kind) {
       ChainKind.tron => tronAddr ?? '',
       ChainKind.solana => _solanaAddress ?? '',
+      ChainKind.xrp => _xrpAddress ?? '',
       ChainKind.evm || ChainKind.unknown => addressHex,
     };
     if (ownerAddress.isEmpty) {
@@ -322,10 +326,54 @@ class WalletController extends ChangeNotifier {
         'refreshBalances: chain=$chainParam kind=$kind address=$ownerAddress',
       );
     }
-    final remote = await _walletBalanceService.fetchBalances(
-      address: ownerAddress,
-      chain: chainParam,
-    );
+    final List<WalletBalanceEntry>? remote;
+    if (kind == ChainKind.solana || kind == ChainKind.xrp) {
+      final symbols = <String>[];
+      for (final e in chainCfg.cryptos) {
+        final s = e.crypto.trim();
+        if (s.isNotEmpty && !symbols.contains(s)) {
+          symbols.add(s);
+        }
+      }
+      if (symbols.isEmpty) {
+        final fb = chainCfg.symbol.trim();
+        if (fb.isNotEmpty) {
+          symbols.add(fb);
+        }
+      }
+      if (symbols.isEmpty) {
+        return null;
+      }
+      final parts = await Future.wait(
+        symbols.map(
+          (crypto) => _walletBalanceService.fetchBalances(
+            address: ownerAddress,
+            chain: chainParam,
+            chainType: chainCfg.chainType,
+            crypto: crypto,
+          ),
+        ),
+      );
+      if (parts.any((p) => p == null)) {
+        return null;
+      }
+      final byCrypto = <String, WalletBalanceEntry>{};
+      for (final p in parts) {
+        for (final row in p!) {
+          final k = (row.crypto ?? '').trim().toUpperCase();
+          if (k.isNotEmpty) {
+            byCrypto[k] = row;
+          }
+        }
+      }
+      remote = byCrypto.values.toList();
+    } else {
+      remote = await _walletBalanceService.fetchBalances(
+        address: ownerAddress,
+        chain: chainParam,
+        chainType: chainCfg.chainType,
+      );
+    }
     if (remote == null) {
       return null;
     }
@@ -578,6 +626,12 @@ class WalletController extends ChangeNotifier {
       debugPrint('Solana derive failed: $e\n$st');
       _solanaAddress = null;
     }
+    try {
+      _xrpAddress = HdWalletService.xrpAddressFromMnemonic(m);
+    } catch (e, st) {
+      debugPrint('XRP derive failed: $e\n$st');
+      _xrpAddress = null;
+    }
   }
 
   Future<void> _loadCredentialsFromActiveMnemonic() async {
@@ -586,6 +640,7 @@ class WalletController extends ChangeNotifier {
     _tronPrivateKey = null;
     _tronAddress = null;
     _solanaAddress = null;
+    _xrpAddress = null;
     _backedUp = false;
     final id = _activeWalletId;
     if (id == null) {
@@ -608,6 +663,7 @@ class WalletController extends ChangeNotifier {
       _tronPrivateKey = null;
       _tronAddress = null;
       _solanaAddress = null;
+      _xrpAddress = null;
     }
   }
 
@@ -655,6 +711,7 @@ class WalletController extends ChangeNotifier {
       _tronPrivateKey = null;
       _tronAddress = null;
       _solanaAddress = null;
+      _xrpAddress = null;
     }
     _backedUp = false;
     _sessionUnlocked = true;
@@ -739,6 +796,7 @@ class WalletController extends ChangeNotifier {
       _tronPrivateKey = null;
       _tronAddress = null;
       _solanaAddress = null;
+      _xrpAddress = null;
     }
     _backedUp = false;
     _sessionUnlocked = true;
@@ -830,6 +888,7 @@ class WalletController extends ChangeNotifier {
         _tronPrivateKey = null;
         _tronAddress = null;
         _solanaAddress = null;
+        _xrpAddress = null;
         _backedUp = false;
         _evmCoins = [];
       } else {
@@ -893,6 +952,20 @@ class WalletController extends ChangeNotifier {
       return await HdWalletService.solanaAddressFromMnemonic(m);
     } catch (e, st) {
       debugPrint('readSolanaAddressForWallet: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 根据助记词推导该钱包的 XRP Classic 地址（`r...`），不切换当前钱包。
+  Future<String?> readXrpAddressForWallet(String walletId) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return HdWalletService.xrpAddressFromMnemonic(m);
+    } catch (e, st) {
+      debugPrint('readXrpAddressForWallet: $e\n$st');
       return null;
     }
   }
@@ -1137,7 +1210,63 @@ class WalletController extends ChangeNotifier {
     final kind = ChainRules.kindForAppChain(cfg);
 
     if (kind == ChainKind.solana) {
-      throw StateError('Solana 链转账尚未在客户端实现签名，请等待后续版本');
+      final wid = _activeWalletId;
+      if (wid == null) {
+        throw StateError('未选择钱包');
+      }
+      final phrase = await _storage.readMnemonicForWallet(wid);
+      if (phrase == null || phrase.trim().isEmpty) {
+        throw StateError('无法读取助记词');
+      }
+      final owner = _solanaAddress;
+      if (owner == null || owner.isEmpty) {
+        throw StateError('Solana 地址未就绪');
+      }
+      final create = await _transferApi.createTransaction(
+        chain: chain,
+        coin: coin,
+        ownerAddress: owner,
+        toAddress: toAddress,
+        amount: amount,
+        chainType: cfg.chainType,
+      );
+      if (create == null) {
+        throw StateError('createTransaction 无响应');
+      }
+      if (create['code'] != 0) {
+        final msg = create['message']?.toString() ?? 'createTransaction 失败';
+        throw StateError(msg);
+      }
+      final data = _asMap(create['data']);
+      final signer = await SolanaBackendTransfer.keyPairFromMnemonic(phrase);
+      if (signer.address != owner) {
+        throw StateError('Solana 派生地址与当前展示地址不一致');
+      }
+      final signedB64 = await SolanaBackendTransfer.signCreateTransactionData(
+        data: data,
+        signer: signer,
+        expectedOwnerBase58: owner,
+        amountSol: amount,
+      );
+      final broad = await _transferApi.broadcastTransaction(
+        chain: chain,
+        coin: coin,
+        data: signedB64,
+        chainType: cfg.chainType,
+      );
+      if (broad == null) {
+        throw StateError('broadcastTransaction 无响应');
+      }
+      if (broad['code'] != 0) {
+        final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+        throw StateError(msg);
+      }
+      final h = _readTxHashFromBroadcast(broad['data']);
+      return h ?? signedB64;
+    }
+
+    if (kind == ChainKind.xrp) {
+      throw StateError('XRP 链转账签名尚未接入，请等待后续版本');
     }
 
     if (kind == ChainKind.tron) {
@@ -1152,6 +1281,7 @@ class WalletController extends ChangeNotifier {
         ownerAddress: owner,
         toAddress: toAddress,
         amount: amount,
+        chainType: cfg.chainType,
       );
       if (create == null) {
         throw StateError('createTransaction 无响应');
@@ -1199,6 +1329,7 @@ class WalletController extends ChangeNotifier {
         chain: chain,
         coin: coin,
         data: jsonEncode(txMap),
+        chainType: cfg.chainType,
       );
       if (kDebugMode) {
         debugPrint('TRON broadcastTransaction resp: $broad');
@@ -1221,6 +1352,7 @@ class WalletController extends ChangeNotifier {
       toAddress: toAddress,
       amount: amount,
       gasPriceType: gasPriceType,
+      chainType: cfg.chainType,
     );
     if (create == null) {
       throw StateError('createTransaction 无响应');
@@ -1254,6 +1386,7 @@ class WalletController extends ChangeNotifier {
       chain: chain,
       coin: coin,
       data: signed,
+      chainType: cfg.chainType,
     );
     if (broad == null) {
       throw StateError('broadcastTransaction 无响应');
