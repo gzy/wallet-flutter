@@ -83,11 +83,38 @@ class WalletCoinList extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           coin.price == 0
-                              ? const Text(
-                                  '未接入行情',
-                                  style: TextStyle(
-                                      color: AppColors.textMuted, fontSize: 14),
-                                )
+                              ? (switch (coin.symbol.trim().toUpperCase()) {
+                                  'USDT' || 'USDC' => const Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            r'$1.00',
+                                            style: TextStyle(
+                                              color: AppColors.textPrimary,
+                                              fontSize: 14,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        SizedBox(width: 8),
+                                        Text(
+                                          '0.00%',
+                                          style: TextStyle(
+                                            color: AppColors.textSecondary,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  _ => const Text(
+                                      '未接入行情',
+                                      style: TextStyle(
+                                        color: AppColors.textMuted,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                })
                               : Row(
                                   children: [
                                     Flexible(

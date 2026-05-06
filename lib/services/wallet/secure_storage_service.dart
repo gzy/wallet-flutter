@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../models/recent_recipient.dart';
 import '../../models/stored_wallet.dart';
+import 'apple_secure_storage_options.dart';
 import 'chain_rules.dart';
 import 'pin_crypto.dart';
 
@@ -21,12 +22,13 @@ class SecureStorageService {
   static const int _kMaxPinFailures = 5;
   static const Duration _kPinLockDuration = Duration(seconds: 30);
 
-  static const IOSOptions _iosOptions = IOSOptions(
-    accessibility: KeychainAccessibility.first_unlock_this_device,
-    synchronizable: false,
-  );
+  /// iOS：`read`/`write` 的 `iOptions`；macOS：`mOptions` 来自默认构造参数。
+  static const IOSOptions _iosOptions = AppleSecureStorageOptions.ios;
 
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  final FlutterSecureStorage _storage = const FlutterSecureStorage(
+    iOptions: AppleSecureStorageOptions.ios,
+    mOptions: AppleSecureStorageOptions.macOs,
+  );
 
   String _mnemonicKey(String id) => 'wallet_mnemonic__$id';
   String _backedUpKey(String id) => 'wallet_backed_up__$id';

@@ -81,6 +81,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.1.0"
+  blockchain_utils:
+    dependency: transitive
+    description:
+      name: blockchain_utils
+      sha256: "9129a7b13e50c692387b69f24ca82c06360a75094dd0d286e21430c5b1492707"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "5.4.0"
   boolean_selector:
     dependency: transitive
     description:
@@ -1317,6 +1325,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "6.6.1"
+  xrpl_dart:
+    dependency: "direct main"
+    description:
+      name: xrpl_dart
+      sha256: "07068078cb9b85e35e44b430855b323a551e8ad61a13c55af413d9dbdbbf6822"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "7.3.0"
   yaml:
     dependency: transitive
     description:

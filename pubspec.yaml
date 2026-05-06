@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #
 # 发版：只改本行 version（如 1.0.2+4）。可跑 VS Code 任务「Flutter: 版本号同步到 Android/iOS（config-only）」刷新双端构建配置；OTA 页/清单另跑「OTA: 从 pubspec 同步 deploy/ota」；再跑 Android / iOS 打包任务。
 # 双端版本号均来自此处，勿在 Xcode/Gradle 里手改覆盖。详见 .vscode/tasks.json。
-version: 1.0.1+5
+version: 1.0.1+6
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -65,6 +65,7 @@ dependencies:
   solana: ^0.32.0+1
   # 使用 ZXing FFI + camera，避免 mobile_scanner/MLKit 在 Apple Silicon arm64 模拟器上无法构建。
   flutter_zxing: ^2.2.1
+  xrpl_dart: ^7.3.0
 
 dev_dependencies:
   flutter_test:

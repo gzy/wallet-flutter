@@ -120,6 +120,11 @@ Uri? _joinExplorerUrl(String? prefix, String pathTail) {
   if (t.isEmpty) {
     return null;
   }
+  // 后端有时会直接返回已拼接地址的前缀（例如 `.../account/<addr>`），
+  // 此时继续走默认拼接会变成 `.../account/<addr>/<addr>`。
+  if (p.endsWith('/$t') || p.endsWith('/$t/')) {
+    return Uri.tryParse(p);
+  }
   // 与 Solscan 等一致：`https://solscan.io/account/{address}?cluster=devnet`
   final withAddr =
       p.replaceAll(RegExp(r'\{address\}', caseSensitive: false), t);
@@ -137,7 +142,17 @@ Uri? _joinExplorerUrl(String? prefix, String pathTail) {
     return Uri.tryParse(withHash);
   }
   final b = p.endsWith('/') ? p : '$p/';
-  return Uri.tryParse('$b$t');
+  final joined = Uri.tryParse('$b$t');
+  if (joined == null) {
+    return null;
+  }
+  // 兜底去重：把尾部连续重复的 path segment 压成一个（典型：XRPL explorer `.../<addr>/<addr>`）。
+  final seg = joined.pathSegments;
+  if (seg.length >= 2 && seg[seg.length - 1] == seg[seg.length - 2]) {
+    final dedupSeg = seg.sublist(0, seg.length - 1);
+    return joined.replace(pathSegments: dedupSeg);
+  }
+  return joined;
 }
 
 String _coinNetworkSubtitle(CoinData live) {

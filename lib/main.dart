@@ -9,6 +9,7 @@ import 'package:sqlite3_flutter_libs/sqlite3_flutter_libs.dart';
 import 'data/local/app_local_cache.dart';
 import 'theme/app_colors.dart';
 import 'providers/wallet_controller.dart';
+import 'services/http/http_signature_init.dart';
 import 'services/install/install_guard.dart';
 import 'screens/wallet_screen.dart';
 import 'screens/market_screen.dart';
@@ -36,6 +37,11 @@ Future<void> main() async {
     await InstallGuard.purgeWalletSecretsOnFreshInstall();
   } catch (_) {
     // 首次安装检测失败时，为避免阻塞启动，继续运行。
+  }
+  try {
+    await HttpSignatureInit.ensureInitialized();
+  } catch (_) {
+    // 设备 ID / 版本读取失败时仍启动；签名 Client 会使用兜底 deviceId。
   }
   AppLocalCache? appCache;
   if (!kIsWeb) {

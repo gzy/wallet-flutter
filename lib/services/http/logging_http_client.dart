@@ -38,13 +38,48 @@ class LoggingHttpClient extends http.BaseClient {
     }
   }
 
+  /// `broadcastTransaction` 的 Query `data` 为整段 base64；**禁止**打成带占位符的合成 URL，
+  /// 否则 `<248 chars>` 经编码会变成 `%3C248+chars%3E`，容易被误拷进浏览器误判为真实参数。
+  String _requestLineForLog(http.BaseRequest request) {
+    final u = request.url;
+    final path = u.path.toLowerCase();
+    if (!path.contains('broadcasttransaction')) {
+      return '→ ${request.method} ${u.toString()}';
+    }
+    if (request is http.Request && request.body.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(request.body);
+        if (decoded is Map) {
+          final ch = decoded['chain']?.toString() ?? '';
+          final co = decoded['coin']?.toString() ?? '';
+          final blob = decoded['data']?.toString() ?? '';
+          final payloadNote = blob.isEmpty
+              ? 'data=(empty in json)'
+              : 'data_len=${blob.length} (json body)';
+          return '→ ${request.method} ${u.scheme}://${u.authority}${u.path} '
+              'dto chain=${_clip(ch)} coin=${_clip(co)} $payloadNote';
+        }
+      } catch (_) {}
+    }
+    final qp = u.queryParameters;
+    final chain = qp['chain'] ?? '';
+    final coin = qp['coin'] ?? '';
+    final crypto = qp['crypto'] ?? '';
+    final blob = qp['data'] ?? '';
+    final payloadNote = blob.isEmpty
+        ? 'data=(empty in query)'
+        : 'data_len=${blob.length} base64 in query (full blob not repeated here)';
+    return '→ ${request.method} ${u.scheme}://${u.authority}${u.path} '
+        'chain=${_clip(chain)} coin=${_clip(coin)} crypto=${_clip(crypto)} $payloadNote';
+  }
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (!enabled) {
       return _inner.send(request);
     }
 
-    final head = '→ ${request.method} ${request.url}';
+    final head = _requestLineForLog(request);
     if (request is http.Request && request.body.isNotEmpty) {
       log('$head\n  req: ${_clip(request.body)}', name: logName);
     } else {
@@ -54,7 +89,8 @@ class LoggingHttpClient extends http.BaseClient {
     final streamed = await _inner.send(request);
     final bytes = await streamed.stream.toBytes();
     log(
-      '← ${streamed.statusCode} ${request.url}\n  resp: ${_bytesPreview(bytes)}',
+      '← ${streamed.statusCode} ${request.url.scheme}://${request.url.authority}${request.url.path}\n'
+      '  resp: ${_bytesPreview(bytes)}',
       name: logName,
     );
 

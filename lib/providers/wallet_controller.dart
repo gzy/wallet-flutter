@@ -21,7 +21,9 @@ import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
 import '../services/wallet/solana_backend_transfer.dart';
+import '../services/wallet/xrp_backend_transfer.dart';
 import '../services/wallet/wallet_transfer_api_service.dart';
+import '../services/wallet/wallet_transaction_service.dart';
 import '../services/wallet/tron_utils.dart';
 
 /// 全局钱包状态：多钱包、PIN、助记词派生、EVM 余额、发送交易
@@ -354,12 +356,11 @@ class WalletController extends ChangeNotifier {
           ),
         ),
       );
-      if (parts.any((p) => p == null)) {
-        return null;
-      }
+      // 某一 crypto 余额接口失败时不应拖垮整条链；全部失败时走下方「仅原生、余额 0」分支。
       final byCrypto = <String, WalletBalanceEntry>{};
       for (final p in parts) {
-        for (final row in p!) {
+        if (p == null) continue;
+        for (final row in p) {
           final k = (row.crypto ?? '').trim().toUpperCase();
           if (k.isNotEmpty) {
             byCrypto[k] = row;
@@ -562,6 +563,24 @@ class WalletController extends ChangeNotifier {
       } else {
         _hiddenCoinIds = <String>{};
       }
+
+      // 冷启动优先用 Drift 快照先画首页资产列表，接口返回后再更新。
+      final wid = _activeWalletId;
+      if (wid != null) {
+        try {
+          final snap = await _localCache?.getEvmCoinsForWallet(wid);
+          if (snap != null && snap.isNotEmpty) {
+            _evmCoins = snap
+                .where((c) => c.id.isEmpty || !_hiddenCoinIds.contains(c.id))
+                .toList();
+            _ensureSendChainDefault();
+            notifyListeners();
+          }
+        } catch (_) {
+          // 缓存读失败不影响正常启动流程
+        }
+      }
+
       if (_pinEnabled) {
         _sessionUnlocked = false;
       } else {
@@ -1179,7 +1198,10 @@ class WalletController extends ChangeNotifier {
       for (final k in keys) {
         final v = m[k];
         if (v is String && v.isNotEmpty) {
-          return v;
+          final t = WalletTransactionService.normalizeTxHashForApi(v);
+          if (t.isNotEmpty) {
+            return t;
+          }
         }
       }
     }
@@ -1266,7 +1288,60 @@ class WalletController extends ChangeNotifier {
     }
 
     if (kind == ChainKind.xrp) {
-      throw StateError('XRP 链转账签名尚未接入，请等待后续版本');
+      final wid = _activeWalletId;
+      if (wid == null) {
+        throw StateError('未选择钱包');
+      }
+      final phrase = await _storage.readMnemonicForWallet(wid);
+      if (phrase == null || phrase.trim().isEmpty) {
+        throw StateError('无法读取助记词');
+      }
+      final owner = _xrpAddress;
+      if (owner == null || owner.isEmpty) {
+        throw StateError('XRP 地址未就绪');
+      }
+      final create = await _transferApi.createTransaction(
+        chain: chain,
+        coin: coin,
+        ownerAddress: owner,
+        toAddress: toAddress,
+        amount: amount,
+        chainType: cfg.chainType,
+      );
+      if (create == null) {
+        throw StateError('createTransaction 无响应');
+      }
+      if (create['code'] != 0) {
+        final msg = create['message']?.toString() ?? 'createTransaction 失败';
+        throw StateError(msg);
+      }
+      final data = _asMap(create['data']);
+      final pk = XrpBackendTransfer.privateKeyFromMnemonic(phrase);
+      final String signedB64;
+      try {
+        signedB64 = XrpBackendTransfer.signCreateTransactionData(
+          data: data,
+          privateKey: pk,
+          expectedOwnerClassicAddress: owner,
+        );
+      } catch (e) {
+        rethrow;
+      }
+      final broad = await _transferApi.broadcastTransaction(
+        chain: chain,
+        coin: coin,
+        data: signedB64,
+        chainType: cfg.chainType,
+      );
+      if (broad == null) {
+        throw StateError('broadcastTransaction 无响应');
+      }
+      if (broad['code'] != 0) {
+        final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+        throw StateError(msg);
+      }
+      final h = _readTxHashFromBroadcast(broad['data']);
+      return h ?? signedB64;
     }
 
     if (kind == ChainKind.tron) {

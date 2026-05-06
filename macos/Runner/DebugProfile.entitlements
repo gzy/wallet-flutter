@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Debug/profile: sandbox off enables Keychain + unsigned local runs (flutter_secure_storage). -->
+	<!-- Release keeps sandbox → use keychain-access-groups + proper code signing there. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 	<key>com.apple.security.cs.allow-jit</key>
-	<true/>
-	<key>com.apple.security.network.server</key>
 	<true/>
 </dict>
 </plist>

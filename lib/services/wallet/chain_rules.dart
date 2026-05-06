@@ -32,7 +32,8 @@ class ChainRules {
     if (t == 'TRON') return ChainKind.tron;
     if (t == 'EVM') return ChainKind.evm;
     if (t == 'SOLANA' || t == 'SOL') return ChainKind.solana;
-    if (t == 'XRP' || t == 'RIPPLE') return ChainKind.xrp;
+    // 后端部分环境返回 XRPL（XRP Ledger），与 XRP 等价。
+    if (t == 'XRP' || t == 'RIPPLE' || t == 'XRPL') return ChainKind.xrp;
     return ChainKind.unknown;
   }
 
@@ -42,7 +43,7 @@ class ChainRules {
     if (q == 'SOL' || q == 'SOLANA') {
       return ChainKind.solana;
     }
-    if (q == 'XRP' || q == 'RIPPLE') {
+    if (q == 'XRP' || q == 'RIPPLE' || q == 'XRPL') {
       return ChainKind.xrp;
     }
     if (q == 'TRX' ||

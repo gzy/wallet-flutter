@@ -1,13 +1,13 @@
 import '../market/app_price_service.dart' show kMarketApiBase;
 
-/// `/api/app/wallet/*`（EVM、TRON）与 **按 `chains` 返回的 chainCode 拼路径** 的专用链（如 SOL、XRP）。
+/// `/api/app/wallet/*`（EVM、TRON）与 **专用链**（Solana、XRP）。
 ///
 /// [chain] 须与 [AppChainConfig.walletApiChainQuery] 一致（优先后端 **chainCode**）。
-/// 专用链的 HTTP 路径为 `/api/app/{chainCode}/…`，不再写死 `solana`/`xrp` 字面量。
+/// 网关路由为小写路径段 **`/api/app/solana/…`**、**`/api/app/xrp/…`**（与 `chains.chainCode` 大小写无关）。
 abstract final class WalletApiPaths {
   WalletApiPaths._();
 
-  /// 当前请求在路径上使用的段：`wallet` 或 **chainCode**（trim 后原样，与网关路由一致）。
+  /// 当前请求在路径上使用的段：`wallet`，或专用链的规范化名（**`solana`** / **`xrp`**）。
   static String walletHttpNamespace(
     String chainQuery, {
     String? chainType,
@@ -21,25 +21,56 @@ abstract final class WalletApiPaths {
     String? chainType,
   }) {
     final t = (chainType ?? '').trim().toUpperCase();
-    if (t == 'SOL' || t == 'SOLANA' || t == 'XRP' || t == 'RIPPLE') {
+    if (t == 'SOL' ||
+        t == 'SOLANA' ||
+        t == 'XRP' ||
+        t == 'RIPPLE' ||
+        t == 'XRPL') {
       return true;
     }
     final q = chainQuery.trim().toUpperCase();
-    if (q == 'SOL' || q == 'SOLANA' || q == 'XRP' || q == 'RIPPLE') {
+    if (q == 'SOL' ||
+        q == 'SOLANA' ||
+        q == 'XRP' ||
+        q == 'RIPPLE' ||
+        q == 'XRPL') {
       return true;
     }
     return false;
   }
 
-  /// EVM/TRON 等聚合接口前缀为 `wallet`；专用链为 **chainCode** 本身。
+  /// 网关注册路由为小写（`/api/app/xrp/balance` 等），与 `chains` 里 `XRP` / `solana` 写法无关。
+  static String _dedicatedUrlPathSegment({
+    required String chainQuery,
+    String? chainType,
+  }) {
+    final t = (chainType ?? '').trim().toUpperCase();
+    final q = chainQuery.trim().toUpperCase();
+    if (t == 'SOL' || t == 'SOLANA' || q == 'SOL' || q == 'SOLANA') {
+      return 'solana';
+    }
+    if (t == 'XRP' ||
+        t == 'RIPPLE' ||
+        t == 'XRPL' ||
+        q == 'XRP' ||
+        q == 'RIPPLE' ||
+        q == 'XRPL') {
+      return 'xrp';
+    }
+    final s = chainQuery.trim();
+    return s.isEmpty ? 'wallet' : s;
+  }
+
+  /// EVM/TRON 等聚合接口前缀为 `wallet`；专用链为 **`solana`** / **`xrp`**（路径段小写）。
   static String _pathSegment({
     required String chainQuery,
     String? chainType,
   }) {
-    if (_isDedicatedSolanaOrXrp(
-        chainQuery: chainQuery, chainType: chainType)) {
-      final s = chainQuery.trim();
-      return s.isEmpty ? 'wallet' : s;
+    if (_isDedicatedSolanaOrXrp(chainQuery: chainQuery, chainType: chainType)) {
+      return _dedicatedUrlPathSegment(
+        chainQuery: chainQuery,
+        chainType: chainType,
+      );
     }
     return 'wallet';
   }

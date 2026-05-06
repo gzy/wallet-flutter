@@ -18,6 +18,10 @@ class WalletTransactionService {
     return HttpClients.create(logName: 'WalletTx', maxLogBodyLength: 16000);
   }
 
+  /// 网关 `txHash` 通常为连续 hex/base58；若列表里误带空格/换行，先去掉以免 URL 中出现 `%20` 等编码。
+  static String normalizeTxHashForApi(String txHash) =>
+      txHash.replaceAll(RegExp(r'\s+'), '').trim();
+
   /// `code == 0` 时返回 `data` 列表；HTTP/解析/`code != 0` 时返回 `null`（由调用方决定是否回退 Blockscout）。
   Future<List<ChainTransactionVo>?> fetchTransactionHistory({
     required String address,
@@ -92,10 +96,14 @@ class WalletTransactionService {
       if (xToken != null && xToken.isNotEmpty) {
         headers['X-Token'] = xToken;
       }
+      final h = normalizeTxHashForApi(txHash);
+      if (h.isEmpty) {
+        return null;
+      }
       final res = await _httpClient
           .get(
             WalletApiPaths.transactionDetail(
-              txHash: txHash,
+              txHash: h,
               chain: chain,
               crypto: crypto,
               chainType: chainType,

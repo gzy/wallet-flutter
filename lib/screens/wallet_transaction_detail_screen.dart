@@ -42,6 +42,24 @@ String _formatMinerFee(double? fee, String? feeCrypto) {
   return '$s $sym';
 }
 
+/// XRPL：手续费以 **drops** 计（1 XRP = 1e6 drops），与接口 `transactionFee`（XRP 小数）一致。
+String _formatXrpNetworkFee(double? fee, String? feeCrypto) {
+  if (fee == null) {
+    return '—';
+  }
+  final sym = (feeCrypto ?? 'XRP').trim();
+  if (sym.isNotEmpty && sym.toUpperCase() != 'XRP') {
+    return _formatMinerFee(fee, feeCrypto);
+  }
+  if (_trxDetailAlmostZero(fee)) {
+    return '0 drops (0 XRP)';
+  }
+  final drops = (fee * 1e6).round();
+  final amt = _formatDetailQuantity(fee);
+  final displaySym = sym.isEmpty ? 'XRP' : sym;
+  return '$drops drops ($amt $displaySym)';
+}
+
 bool _trxDetailAlmostZero(double? x) => x == null || x.abs() < 1e-12;
 
 String _fmtTrxDetailAmount(double? v) {
@@ -552,6 +570,20 @@ class WalletTransactionDetailScreen extends StatelessWidget {
           if (chainKind == ChainKind.tron) ...[
             const SizedBox(height: 12),
             ..._tronResourceStatusRows(),
+          ],
+          if (chainKind == ChainKind.xrp) ...[
+            const SizedBox(height: 12),
+            _kvRow(
+              '手续费',
+              _formatXrpNetworkFee(detail.transactionFee, detail.feeCrypto),
+            ),
+          ],
+          if (chainKind == ChainKind.solana) ...[
+            const SizedBox(height: 12),
+            _kvRow(
+              '手续费',
+              _formatMinerFee(detail.transactionFee, detail.feeCrypto),
+            ),
           ],
           const SizedBox(height: 12),
           _kvRow('时间', _formatFullDateTime(detail.transactionTime)),

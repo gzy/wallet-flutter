@@ -3,16 +3,16 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../http/api_config.dart';
 import '../http/http_clients.dart';
 
-/// 后端行情基址，可通过 `--dart-define=MARKET_API_BASE=https://...` 覆盖。
+/// 与 [kWalletApiBase] 相同；历史代码可继续 import 本符号。
 ///
+/// 根地址优先 `--dart-define=WALLET_API_BASE=...`，其次 `MARKET_API_BASE`，见 [api_config.dart]。
+const String kMarketApiBase = kWalletApiBase;
+
 /// 文档：[Swagger 价格 · allPrice](https://api-wallet-test.uone.me/swagger-ui/index.html#/%E4%BB%B7%E6%A0%BC/allPrice)
 /// 实际 OpenAPI 路径：`POST /api/app/price/all`，`data` 为 `{ "ETHUSDT": { "symbol", "price", "change24h", "ts" }, ... }`。
-const String kMarketApiBase = String.fromEnvironment(
-  'MARKET_API_BASE',
-  defaultValue: 'https://api-wallet-test.uone.me',
-);
 
 class AppSymbolQuote {
   const AppSymbolQuote({required this.price, required this.change24h});
@@ -92,8 +92,7 @@ class AppPriceService {
       '${symbol.toUpperCase()}USDT';
 
   /// USDT 与 USD 1:1 锚定，**不使用** `allPrice` 接口数值（避免与稳定币定义不一致）。
-  static bool isUsdT(String symbol) =>
-      symbol.toUpperCase().trim() == 'USDT';
+  static bool isUsdT(String symbol) => symbol.toUpperCase().trim() == 'USDT';
 
   /// 合并接口报价：USDT 固定 1 美元、24h 涨跌 0；其余用 [fromApi]，缺省为 0。
   static AppSymbolQuote resolveQuote(String symbol, AppSymbolQuote? fromApi) {
