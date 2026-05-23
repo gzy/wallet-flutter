@@ -193,6 +193,78 @@ class _CoinManagementScreenState extends State<CoinManagementScreen> {
   }
 }
 
+/// 币种显隐开关：对齐设计稿尺寸与配色（紧凑、紫轨白钮 / 灰轨浅灰钮）。
+class _CompactVisibilitySwitch extends StatelessWidget {
+  const _CompactVisibilitySwitch({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  static const Color _offTrack = Color(0xFF3A3A3E);
+  static const Color _offThumb = Color(0xFFE4E4E7);
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 44,
+      height: 26,
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: Switch(
+          value: value,
+          onChanged: onChanged,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          splashRadius: 18,
+          trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+          trackColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return AppColors.accent;
+            }
+            return _offTrack;
+          }),
+          thumbColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return AppColors.textPrimary;
+            }
+            return _offThumb;
+          }),
+        ),
+      ),
+    );
+  }
+}
+
+/// 列表排序把手：细三横线，比 Material [Icons.drag_handle] 更轻。
+class _ReorderGrip extends StatelessWidget {
+  const _ReorderGrip();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 20,
+      height: 28,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(
+          3,
+          (_) => Container(
+            width: 16,
+            height: 1.5,
+            margin: const EdgeInsets.symmetric(vertical: 2.5),
+            decoration: BoxDecoration(
+              color: AppColors.textMuted,
+              borderRadius: BorderRadius.circular(1),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CoinManageTile extends StatelessWidget {
   const _CoinManageTile({
     super.key,
@@ -259,32 +331,27 @@ class _CoinManageTile extends StatelessWidget {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
               onPressed: onPinTop,
+              tooltip: '置顶',
               icon: const Icon(
-                Icons.arrow_upward,
+                Icons.vertical_align_top_rounded,
                 color: AppColors.textSecondary,
-                size: 20,
+                size: 22,
               ),
             ),
           if (showDragHandle)
             ReorderableDragStartListener(
               index: index,
               child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Icon(
-                  Icons.drag_handle,
-                  color: AppColors.textSecondary,
-                  size: 22,
-                ),
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: _ReorderGrip(),
               ),
             )
           else
             const SizedBox(width: 30),
           if (onVisibilityChanged != null)
-            Switch.adaptive(
+            _CompactVisibilitySwitch(
               value: visible,
-              activeTrackColor: AppColors.accent.withValues(alpha: 0.45),
-              activeThumbColor: AppColors.accent,
-              onChanged: onVisibilityChanged,
+              onChanged: onVisibilityChanged!,
             ),
         ],
       ),
