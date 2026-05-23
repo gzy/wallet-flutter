@@ -40,14 +40,22 @@ class PinnedHttpClient {
     // 这样可以避免因为证书解析差异导致的“所有连接都走 badCertificateCallback”不稳定问题。
     final io = HttpClient();
 
+    // 略短于常见网关 idle，减少「服务端已关连接、客户端仍复用」导致的
+    // WRONG_VERSION_NUMBER / 握手异常（并行余额请求时更明显）。
+    io.idleTimeout = const Duration(seconds: 10);
+
     io.badCertificateCallback = (cert, host, port) {
-      final pins = pinsByHost[host.trim().toLowerCase()];
-      if (pins == null || pins.isEmpty) {
-        // 没配置 pin 的 host，不在这里放行（维持系统默认：证书坏就拒绝）。
+      try {
+        final pins = pinsByHost[host.trim().toLowerCase()];
+        if (pins == null || pins.isEmpty) {
+          // 没配置 pin 的 host，不在这里放行（维持系统默认：证书坏就拒绝）。
+          return false;
+        }
+        final got = SpkiPinning.spkiSha256Base64FromPem(cert.pem);
+        return pins.contains(got);
+      } catch (_) {
         return false;
       }
-      final got = SpkiPinning.spkiSha256Base64FromPem(cert.pem);
-      return pins.contains(got);
     };
 
     return io;

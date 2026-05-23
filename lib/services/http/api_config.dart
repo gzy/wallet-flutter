@@ -7,6 +7,13 @@
 ///   --dart-define=HTTP_SIGN_SECRET=你的密钥
 /// ```
 ///
+/// ### TLS / 连接异常（如 `WRONG_VERSION_NUMBER`）
+///
+/// - **`WALLET_HTTP_CLOSE_CONNECTION=true`**（默认）：对同钱包 host 的请求加 `Connection: close`，
+///   减轻 keep-alive 复用到已被网关关闭的连接上的问题。
+/// - **`WALLET_HTTP_CLOSE_CONNECTION=false`**：恢复长连接（略省握手）。
+/// - **`HTTP_DISABLE_SPKI_PINNING=true`**：关闭 SPKI 钉扎，仅用系统 CA（仅建议本地排障）。
+///
 /// Android release（`android/app/build.gradle.kts`）可在 `defaultConfig` / `buildTypes` 里为
 /// `dart-define` 配置与 CI 一致的环境变量。
 ///

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-/// 静态 SVG 映射；新增币种时从何处取资源见 docs/assets-icon-sources.md。
+/// 仅使用打包进 App 的 `assets/coins/*.svg`；新增币种见 `docs/assets-icon-sources.md`。
 class CoinIcon extends StatelessWidget {
   final String symbol;
   final double size;
@@ -14,6 +14,7 @@ class CoinIcon extends StatelessWidget {
 
   static const Map<String, String> _assetBySymbol = {
     'BTC': 'assets/coins/btc.svg',
+    'DOGE': 'assets/coins/doge.svg',
     'ETH': 'assets/coins/eth.svg',
     'BNB': 'assets/coins/bnb.svg',
     'SOL': 'assets/coins/sol.svg',
@@ -21,21 +22,12 @@ class CoinIcon extends StatelessWidget {
     'USDC': 'assets/coins/usdc.svg',
     'TRX': 'assets/coins/trx.svg',
     'XRP': 'assets/coins/xrp.svg',
+    'TON': 'assets/coins/ton.svg',
     // Polygon 目前后端返回 symbol=POL，但多数图标库仍用 MATIC 命名
     'POL': 'assets/coins/matic.svg',
   };
 
-  @override
-  Widget build(BuildContext context) {
-    final sym = symbol.trim().toUpperCase();
-    final asset = _assetBySymbol[sym];
-    if (asset != null) {
-      return SvgPicture.asset(
-        asset,
-        width: size,
-        height: size,
-      );
-    }
+  Widget _letterDisk(String sym) {
     final letter = sym.isEmpty ? '?' : sym.substring(0, 1);
     return Container(
       width: size,
@@ -55,5 +47,20 @@ class CoinIcon extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sym = symbol.trim().toUpperCase();
+    final asset = _assetBySymbol[sym];
+    if (asset != null) {
+      return SvgPicture.asset(
+        asset,
+        width: size,
+        height: size,
+        errorBuilder: (context, error, stackTrace) => _letterDisk(sym),
+      );
+    }
+    return ClipOval(child: _letterDisk(sym));
   }
 }

@@ -8,7 +8,7 @@
 
 | 项 | 说明 |
 |----|------|
-| **对应组件** | `lib/widgets/coin_icon.dart` → `CoinIcon` |
+| **对应组件** | `lib/widgets/coin_icon.dart` → `CoinIcon`（**仅** `assets/coins` 本地 SVG） |
 | **文件格式** | SVG（彩色） |
 | **与当前资源关系** | 现有文件的 `viewBox`、`32×32` 风格及路径结构与下列仓库的 **`svg/color/`** 彩色 SVG 一致；历史提交仅写「开源 SVG」，此处补全可查 URL。 |
 | **推荐来源（唯一主源）** | **[spothq/cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons)**（npm 包名常为 `cryptocurrency-icons`，亦可能跳转至继任维护仓库，以 README 为准） |
@@ -29,7 +29,7 @@
 | **文件格式** | PNG（工程内现为圆角裁切外的方形源图 + `ClipOval`） |
 | **历史记录** | 引入提交未写明具体站点；以下为**推荐的统一供给侧**，便于以后扩展新链时「仍从同一地方拉」。 |
 | **推荐来源（唯一主源）** | **[trustwallet/assets](https://github.com/trustwallet/assets)** → 目录 **`blockchains/<链目录名>/info/logo.png`** |
-| **链目录名与后端 `chainCode` 对照（示例）** | `ETH` → `ethereum`；`BSC` → `smartchain`；`POL` / Polygon → `polygon`；`ARB` → `arbitrum`；`TRX` → `tron`；`SOL` → `solana`；`XRP` → `ripple`。  
+| **链目录名与后端 `chainCode` 对照（示例）** | `BTC` → `bitcoin`；`ETH` → `ethereum`；`BSC` → `smartchain`；`POL` / Polygon → `polygon`；`ARB` → `arbitrum`；`Base` / `BASE` → **`base`**；`OPM`（Optimism）→ **`optimism`**；`TRX` → `tron`；`SOL` → `solana`；`XRP` → `ripple`；`TON` → `ton`。  
   新链请到该仓库 `blockchains/` 下搜索官方链名，以 **实际文件夹名** 为准。 |
 | **许可** | 以 [trustwallet/assets 仓库 LICENSE / 贡献须知](https://github.com/trustwallet/assets) 为准；多用于展示链标识时请遵守其对商标与分叉作品的要求。 |
 
@@ -40,4 +40,17 @@
 ## 3. 不要怎么做
 
 - 不要用无版权说明的壁纸站、盗版图标包或随机 CDN，以免许可不清。
-- 不要依赖「运行时抓 CoinGecko 图片 URL」作为主要方案（离线、改版、配额、合规都不好控）；若产品将来要做 CDN 兜底，再在单独设计文档里定义。
+- 不要依赖「运行时抓 CoinGecko 图片 URL」或运行时 CDN 拉图标；发版资源以 **`assets/coins` 落盘**为准。
+
+---
+
+## 4. 离线打包与「一次性」落盘（不发版在线拉图）
+
+| 项 | 说明 |
+|----|------|
+| **运行时** | App **不**请求 CDN 显示币种图标；`CoinIcon` 只读 `assets/coins/*.svg`，未映射的 symbol 显示首字母占位。 |
+| **新增币种** | 开发阶段从第 1 节同一主源 **[spothq/cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons)** 的 `svg/color/<ticker小写>.svg` **下载到本地**（若仓库无该 ticker，可用 Trust Wallet / 官方品牌资源替代），放入 `assets/coins/`，再在 `CoinIcon._assetBySymbol` 增加 `大写符号 → 路径`（`POL` 等别名与第 1 节一致）。 |
+| **直链参考（仅开发机 curl/wget，不打进业务代码）** | `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@<tag>/svg/color/<ticker>.svg` — `<tag>` 与 [Releases](https://github.com/spothq/cryptocurrency-icons/releases) 对齐；下载后**改名/校验**再提交。 |
+| **`CoinData.icon`** | 当前写空串即可；列表展示不依赖该字段。旧缓存若存过 URL/emoji 可忽略。 |
+
+**维护：** 发版前确认 `pubspec.yaml` 已包含 `assets/coins/`（目录级声明即可）。

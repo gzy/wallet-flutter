@@ -146,7 +146,7 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 进入后台/不可见即上锁；回到前台按 30 分钟窗口决定是否免 PIN
+    // 进入后台记录时刻；回到前台时若后台超过 30 分钟则要求 PIN
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
@@ -154,7 +154,7 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
       return;
     }
     if (state == AppLifecycleState.resumed) {
-      context.read<WalletController>().onAppResumed();
+      unawaited(context.read<WalletController>().onAppResumed());
     }
   }
 

@@ -13,10 +13,15 @@ class ChainIcon extends StatelessWidget {
 
   static const Map<String, String> _assetByChainCode = {
     'ARB': 'assets/chains/arb.png',
+    'BASE': 'assets/chains/base.png',
+    'BTC': 'assets/chains/btc.png',
+    'DOGE': 'assets/chains/doge.png',
     'BSC': 'assets/chains/bsc.png',
     'ETH': 'assets/chains/eth.png',
+    'OPM': 'assets/chains/optimism.png',
     'POL': 'assets/chains/polygon.png',
     'SOL': 'assets/chains/sol.png',
+    'TON': 'assets/chains/ton.png',
     'TRX': 'assets/chains/trx.png',
     'XRP': 'assets/chains/xrp.png',
   };

@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:developer' show log;
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import 'http_request_timing.dart';
 
 /// 包装任意 [http.Client]，在 [enabled] 时统一打印请求 / 响应（相当于拦截器）。
 ///
@@ -36,6 +39,13 @@ class LoggingHttpClient extends http.BaseClient {
     } catch (_) {
       return '<binary ${bytes.length} bytes>';
     }
+  }
+
+  String _logTimestamp() {
+    final t = DateTime.now();
+    String pad2(int n) => n.toString().padLeft(2, '0');
+    String pad3(int n) => n.toString().padLeft(3, '0');
+    return '${pad2(t.hour)}:${pad2(t.minute)}:${pad2(t.second)}.${pad3(t.millisecond)}';
   }
 
   /// `broadcastTransaction` 的 Query `data` 为整段 base64；**禁止**打成带占位符的合成 URL，
@@ -79,20 +89,39 @@ class LoggingHttpClient extends http.BaseClient {
       return _inner.send(request);
     }
 
+    final reqTs = _logTimestamp();
     final head = _requestLineForLog(request);
+    httpRequestTimingFor(request);
     if (request is http.Request && request.body.isNotEmpty) {
-      log('$head\n  req: ${_clip(request.body)}', name: logName);
+      log('[$reqTs] $head\n  req: ${_clip(request.body)}', name: logName);
     } else {
-      log(head, name: logName);
+      log('[$reqTs] $head', name: logName);
+    }
+    if (kDebugMode) {
+      debugPrint('[$logName][$reqTs] $head');
     }
 
     final streamed = await _inner.send(request);
+
+    final bodySw = Stopwatch()..start();
     final bytes = await streamed.stream.toBytes();
+    final timing = httpRequestTimingFor(request);
+    timing.bodyMs = bodySw.elapsedMilliseconds;
+
+    final path = request.url.path;
+    final respTs = _logTimestamp();
+    final totalMs = timing.totalMs;
+    final breakdown = timing.breakdownLabel();
     log(
-      '← ${streamed.statusCode} ${request.url.scheme}://${request.url.authority}${request.url.path}\n'
+      '[$respTs] ← ${streamed.statusCode} $path · ${totalMs}ms ($breakdown)\n'
       '  resp: ${_bytesPreview(bytes)}',
       name: logName,
     );
+    if (kDebugMode) {
+      debugPrint(
+        '[$logName][$respTs] ${request.method} $path · ${totalMs}ms ($breakdown)',
+      );
+    }
 
     return http.StreamedResponse(
       Stream<List<int>>.value(bytes),

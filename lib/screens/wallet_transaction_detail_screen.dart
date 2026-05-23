@@ -120,7 +120,13 @@ String _midTruncHash(String hash, ChainKind kind) {
     ChainKind.evm ||
     ChainKind.unknown =>
       raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
-    ChainKind.tron || ChainKind.solana || ChainKind.xrp => raw,
+    ChainKind.tron ||
+    ChainKind.solana ||
+    ChainKind.xrp ||
+    ChainKind.btc ||
+    ChainKind.doge ||
+    ChainKind.ton =>
+      raw,
   };
   if (h.length <= 22) {
     return h;
@@ -167,7 +173,11 @@ String _normWalletAddr(String? raw, ChainKind kind) {
     case ChainKind.tron:
     case ChainKind.solana:
     case ChainKind.xrp:
+    case ChainKind.btc:
+    case ChainKind.doge:
       return s;
+    case ChainKind.ton:
+      return ChainRules.normalizeAddressForStorage(ChainKind.ton, s);
     case ChainKind.evm:
     case ChainKind.unknown:
       final x = s.toLowerCase();
@@ -187,7 +197,11 @@ String _normAddr(String? raw, ChainKind kind) {
     case ChainKind.tron:
     case ChainKind.solana:
     case ChainKind.xrp:
+    case ChainKind.btc:
+    case ChainKind.doge:
       return s;
+    case ChainKind.ton:
+      return ChainRules.normalizeAddressForStorage(ChainKind.ton, s);
     case ChainKind.evm:
     case ChainKind.unknown:
       final x = s.toLowerCase();
@@ -262,13 +276,20 @@ Uri? _txExplorerUri(ChainTransactionVo detail, CoinData coin, String rawHash) {
     ChainKind.evm ||
     ChainKind.unknown =>
       raw.startsWith('0x') || raw.startsWith('0X') ? raw : '0x$raw',
-    ChainKind.tron || ChainKind.solana || ChainKind.xrp => raw,
+    ChainKind.tron ||
+    ChainKind.solana ||
+    ChainKind.xrp ||
+    ChainKind.btc ||
+    ChainKind.doge ||
+    ChainKind.ton =>
+      raw,
   };
   final p = coin.txUrlPrefix?.trim();
   if (p == null || p.isEmpty) {
     return null;
   }
   var u = p.replaceAll(RegExp(r'\{transaction\}', caseSensitive: false), h);
+  u = u.replaceAll(RegExp(r'\(transaction\)', caseSensitive: false), h);
   u = u.replaceAll(RegExp(r'\{(tx|hash)\}', caseSensitive: false), h);
   if (u != p) {
     return Uri.tryParse(u);
@@ -579,6 +600,20 @@ class WalletTransactionDetailScreen extends StatelessWidget {
             ),
           ],
           if (chainKind == ChainKind.solana) ...[
+            const SizedBox(height: 12),
+            _kvRow(
+              '手续费',
+              _formatMinerFee(detail.transactionFee, detail.feeCrypto),
+            ),
+          ],
+          if (chainKind == ChainKind.ton) ...[
+            const SizedBox(height: 12),
+            _kvRow(
+              '手续费',
+              _formatMinerFee(detail.transactionFee, detail.feeCrypto),
+            ),
+          ],
+          if (chainKind == ChainKind.btc || chainKind == ChainKind.doge) ...[
             const SizedBox(height: 12),
             _kvRow(
               '手续费',

@@ -319,13 +319,7 @@ class _TransferScreenState extends State<TransferScreen> {
       (c) => c.walletApiChainQuery == chainQuerySel,
       orElse: () => wallet.backendChains.first,
     );
-    final sendKind = ChainRules.kindForAppChain(chainCfgSel);
-    final fromAddr = switch (sendKind) {
-      ChainKind.tron => wallet.tronAddress,
-      ChainKind.solana => wallet.solanaAddress,
-      ChainKind.xrp => wallet.xrpAddress,
-      ChainKind.evm || ChainKind.unknown => wallet.addressHex,
-    };
+    final fromAddr = wallet.ownerAddressForChainConfig(chainCfgSel);
     final walletName = wallet.activeWallet?.name.trim();
     final fromWalletLabel = (walletName != null && walletName.isNotEmpty)
         ? walletName
@@ -839,8 +833,7 @@ class _TransferScreenState extends State<TransferScreen> {
       orElse: () => wallet.backendChains.first,
     );
     final kind = ChainRules.kindForAppChain(chainCfg);
-    final isTron = kind == ChainKind.tron;
-    final from = (isTron ? wallet.tronAddress : wallet.addressHex) ?? '';
+    final from = wallet.ownerAddressForChainConfig(chainCfg) ?? '';
     final toNorm = _normalizeAddrField(_address.text);
     final isToValid = ChainRules.isValidAddress(kind, toNorm);
     if (!isToValid) {
@@ -848,6 +841,9 @@ class _TransferScreenState extends State<TransferScreen> {
         ChainKind.tron => '收款地址格式无效，请使用 Tron 的 T... 地址',
         ChainKind.solana => '收款地址格式无效，请使用 Solana Base58 地址',
         ChainKind.xrp => '收款地址格式无效，请使用 XRP 的 r... 地址',
+        ChainKind.ton => '收款地址格式无效，请使用 TON 友好地址（EQ…/UQ…）或 raw 格式',
+        ChainKind.btc => '收款地址格式无效，请使用 bc1… 或 tb1… 的 Native SegWit 地址',
+        ChainKind.doge => '收款地址格式无效，请使用 Dogecoin 的 D… 或测试网地址',
         ChainKind.evm ||
         ChainKind.unknown =>
           '收款地址格式无效，请使用完整 0x 开头的 42 位十六进制地址',
@@ -1079,8 +1075,8 @@ Widget _transferKvRowCompact(String left, String right) {
   );
 }
 
-/// 确认弹窗内手续费展示：EVM（Gwei 档位）、TRON（资源）、SOL/XRP 等专用链（无矿工费档位）。
-enum _TransferFeeUiKind { evm, tron, dedicated }
+/// 确认弹窗内手续费展示：EVM（Gwei 档位）、TRON（资源）、BTC（txSize×sat/vB）、SOL/XRP/TON（占位）。
+enum _TransferFeeUiKind { evm, tron, dedicated, btc }
 
 class _TransferConfirmSheet extends StatefulWidget {
   const _TransferConfirmSheet({
@@ -1117,6 +1113,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   WalletGasPriceQuote? _gasQuote;
   int? _gasLimit;
   Map<String, dynamic>? _tronEstimate;
+  int? _btcTxSize;
+  WalletBtcFeeQuote? _btcFeeQuote;
 
   WalletGasPriceService get _gasSvc => WalletGasPriceService();
   WalletEstimateGasService get _estimateGasSvc => WalletEstimateGasService();
@@ -1136,7 +1134,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     );
     return switch (ChainRules.kindForAppChain(chainCfg)) {
       ChainKind.tron => _TransferFeeUiKind.tron,
-      ChainKind.solana || ChainKind.xrp => _TransferFeeUiKind.dedicated,
+      ChainKind.btc || ChainKind.doge => _TransferFeeUiKind.btc,
+      ChainKind.solana || ChainKind.xrp || ChainKind.ton => _TransferFeeUiKind.dedicated,
       _ => _TransferFeeUiKind.evm,
     };
   }
@@ -1192,6 +1191,8 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
         _gasQuote = null;
         _gasLimit = null;
         _tronEstimate = null;
+        _btcTxSize = null;
+        _btcFeeQuote = null;
       });
     }
 
@@ -1200,7 +1201,45 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       orElse: () => widget.wallet.backendChains.first,
     );
     final chainKind = ChainRules.kindForAppChain(chainCfg);
-    if (chainKind == ChainKind.solana || chainKind == ChainKind.xrp) {
+    if (chainKind == ChainKind.btc || chainKind == ChainKind.doge) {
+      final owner = widget.wallet.ownerAddressForChainConfig(chainCfg);
+      final amount = double.tryParse(widget.amountStr);
+      WalletBtcFeeQuote? btcQuote;
+      int? txSize;
+      if (owner != null && owner.isNotEmpty && amount != null) {
+        final qF = _gasSvc.fetchBtcFeeQuote(chain: _chainCode);
+        final eF = _estimateGasSvc.estimateGasPreferV2(
+          chain: _chainCode,
+          coin: widget.sel.symbol,
+          ownerAddress: owner,
+          toAddress: widget.toAddressNormalized,
+          amount: amount,
+          requireGasLimit: false,
+        );
+        btcQuote = await qF;
+        final data = await eF;
+        txSize = WalletEstimateGasService.parseTxSize(data);
+        if (kDebugMode) {
+          debugPrint(
+            'BTC fee: txSize=$txSize quote=${btcQuote != null ? 'ok' : 'null'}',
+          );
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _feeUiKind = _TransferFeeUiKind.btc;
+        _gasQuote = null;
+        _gasLimit = null;
+        _btcFeeQuote = btcQuote;
+        _btcTxSize = txSize;
+        _priceLoading = false;
+        _limitLoading = false;
+      });
+      return;
+    }
+    if (chainKind == ChainKind.solana ||
+        chainKind == ChainKind.xrp ||
+        chainKind == ChainKind.ton) {
       if (!mounted) {
         return;
       }
@@ -1249,22 +1288,19 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       return;
     }
     final qFuture = _gasSvc.fetchGasPrice(chain: _chainCode);
-    final owner = switch (chainKind) {
-      ChainKind.tron => widget.wallet.tronAddress,
-      ChainKind.solana => widget.wallet.solanaAddress,
-      ChainKind.xrp => widget.wallet.xrpAddress,
-      ChainKind.evm || ChainKind.unknown => widget.wallet.addressHex,
-    };
+    final owner = widget.wallet.ownerAddressForChainConfig(chainCfg);
     final amount = double.tryParse(widget.amountStr);
     int? fromApi;
     if (owner == null || owner.isEmpty || amount == null) {
       fromApi = null;
     } else {
-      final normalizedOwner = isTron
+      final normalizedOwner = chainKind == ChainKind.tron
           ? owner
-          : (owner.startsWith('0x') || owner.startsWith('0X')
-              ? owner
-              : '0x$owner');
+          : (chainKind == ChainKind.evm || chainKind == ChainKind.unknown)
+              ? (owner.startsWith('0x') || owner.startsWith('0X')
+                  ? owner
+                  : '0x$owner')
+              : owner;
       final data = await _estimateGasSvc.estimateGasPreferV2(
         chain: _chainCode,
         coin: widget.sel.symbol,
@@ -1322,6 +1358,21 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
       if (bw > 0 || en > 0) return '带宽 $bw · 能量 $en';
       return '—';
     }
+    if (_feeUiKind == _TransferFeeUiKind.btc) {
+      final sz = _btcTxSize;
+      if (sz == null || sz <= 0) {
+        return '缺少体积估算（txSize）';
+      }
+      final bq = _btcFeeQuote;
+      if (bq == null) {
+        return '缺少费率（gasPrice），请稍后重试';
+      }
+      final feeBtc = _feeBtcForBtcLevel(bq, _gasLevel);
+      if (feeBtc == null) {
+        return '—';
+      }
+      return '约 ${feeBtc.toStringAsFixed(8)} ${widget.sel.symbol}（$sz vB）';
+    }
     if (quote == null) {
       return '获取失败，稍后重试';
     }
@@ -1350,6 +1401,21 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     if (_feeUiKind == _TransferFeeUiKind.tron) {
       return '—';
     }
+    if (_feeUiKind == _TransferFeeUiKind.btc) {
+      final bq = _btcFeeQuote;
+      if (bq == null || widget.sel.priceUsd <= 0) {
+        return '—';
+      }
+      final btc = _feeBtcForBtcLevel(bq, level);
+      if (btc == null) {
+        return '—';
+      }
+      final usd = btc * widget.sel.priceUsd;
+      if (usd < 0.01) {
+        return '<\$0.01';
+      }
+      return '\$${usd.toStringAsFixed(2)}';
+    }
     if (quote == null || widget.sel.priceUsd <= 0) {
       return '—';
     }
@@ -1371,6 +1437,88 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     final gwei = double.tryParse(gweiStr);
     if (gwei == null || gwei <= 0) return null;
     return (gwei * _gasLimit!) / 1e9;
+  }
+
+  String _btcSatPerVbyteForLevel(WalletBtcFeeQuote quote, String level) {
+    switch (level) {
+      case '低':
+        return quote.slowSatPerVbyte.toString();
+      case '高':
+        return quote.fastSatPerVbyte.toString();
+      case '中':
+      default:
+        return quote.mediumSatPerVbyte.toString();
+    }
+  }
+
+  /// `feeBTC = ceil(txSize * satPerVbyte) / 1e8`
+  double? _feeBtcForBtcLevel(WalletBtcFeeQuote quote, String level) {
+    final sz = _btcTxSize;
+    if (sz == null || sz <= 0) return null;
+    final satStr = _btcSatPerVbyteForLevel(quote, level);
+    final satPerVb = double.tryParse(satStr);
+    if (satPerVb == null || satPerVb < 0) return null;
+    final feeSat = (sz * satPerVb).ceil();
+    return feeSat / 1e8;
+  }
+
+  Widget _btcGasCell(WalletBtcFeeQuote? quote, String level) {
+    final isActive = _gasLevel == level;
+    final satStr = quote == null ? '—' : _btcSatPerVbyteForLevel(quote, level);
+    const unit = ' sat/vB';
+    return InkWell(
+      onTap: _feeLoading
+          ? null
+          : () {
+              setState(() => _gasLevel = level);
+            },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 78),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF2F2F36) : const Color(0xFF1B1B1F),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isActive ? AppColors.accent : const Color(0xFF505050),
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              level,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _usdForLevel(null, level),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.success,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              satStr == '—' ? '—' : '$satStr$unit',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textSecondary,
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _gasCell(
@@ -1439,7 +1587,9 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
   Widget build(BuildContext context) {
     final quote = _gasQuote;
     final tron = _tronEstimate;
-    final tronTitle = _feeUiKind == _TransferFeeUiKind.tron ? '资源消耗' : '矿工费';
+    final feeCardTitle = _feeUiKind == _TransferFeeUiKind.tron
+        ? '资源消耗'
+        : (_feeUiKind == _TransferFeeUiKind.btc ? '网络费' : '矿工费');
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1549,10 +1699,39 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                   ] else ...[
                     _transferKvRowCompact('Resources', '—'),
                   ],
+                ] else if (_feeUiKind == _TransferFeeUiKind.btc) ...[
+                  _transferKvRow(feeCardTitle, _gasFeeTitle(quote)),
+                  const SizedBox(height: 10),
+                  _transferKvRow(
+                    '支付方式',
+                    '${widget.sel.symbol}（${widget.sel.network}）',
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _btcGasCell(_btcFeeQuote, '低'),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _btcGasCell(_btcFeeQuote, '中'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _btcGasCell(_btcFeeQuote, '高'),
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(child: SizedBox()),
+                    ],
+                  ),
                 ] else if (_feeUiKind == _TransferFeeUiKind.dedicated) ...[
                   _transferKvRowCompact('手续费', '以链上实际消耗为准'),
                 ] else ...[
-                  _transferKvRow(tronTitle, _gasFeeTitle(quote)),
+                  _transferKvRow(feeCardTitle, _gasFeeTitle(quote)),
                   const SizedBox(height: 10),
                   _transferKvRow(
                     '支付方式',
@@ -1662,26 +1841,22 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                     );
                                     final execKind = ChainRules.kindForAppChain(
                                         chainCfgExec);
-                                    final owner = switch (execKind) {
-                                      ChainKind.tron =>
-                                        widget.wallet.tronAddress,
-                                      ChainKind.solana =>
-                                        widget.wallet.solanaAddress,
-                                      ChainKind.xrp => widget.wallet.xrpAddress,
-                                      ChainKind.evm ||
-                                      ChainKind.unknown =>
-                                        widget.wallet.addressHex,
-                                    };
+                                    final owner = widget.wallet
+                                        .ownerAddressForChainConfig(
+                                            chainCfgExec);
                                     if (owner == null || owner.isEmpty) {
                                       messenger.showSnackBar(
                                         const SnackBar(content: Text('钱包地址为空')),
                                       );
                                       return;
                                     }
-                                    final gasPriceType =
-                                        execKind == ChainKind.tron
-                                            ? null
-                                            : switch (_gasLevel) {
+                                    final gasPriceType = (execKind ==
+                                                ChainKind.tron ||
+                                            execKind == ChainKind.btc ||
+                                            execKind == ChainKind.doge ||
+                                            execKind == ChainKind.ton)
+                                        ? null
+                                        : switch (_gasLevel) {
                                                 '低' => 'slow',
                                                 '高' => 'fast',
                                                 _ => 'medium',
@@ -1758,7 +1933,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                         return;
                                       }
                                       // 先关掉确认页；余额刷新较慢，若 await 后再 pop 会体感「卡住」。
-                                      Navigator.of(host).pop();
+                                      Navigator.of(host).pop(true);
                                       if (!host.mounted) {
                                         return;
                                       }
@@ -1766,6 +1941,10 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                         SnackBar(content: Text('已广播: $hash')),
                                       );
                                       unawaited(wc.refreshBalances());
+                                      unawaited(wc.notifyTransferCompleted(
+                                        chainParam: _chainCode,
+                                        coinSymbol: widget.sel.symbol,
+                                      ));
                                     } catch (e) {
                                       closeLoading();
                                       messenger.showSnackBar(

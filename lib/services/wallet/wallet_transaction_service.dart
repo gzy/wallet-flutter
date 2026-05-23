@@ -7,7 +7,7 @@ import '../../models/chain_transaction_vo.dart';
 import '../http/http_clients.dart';
 import 'wallet_api_paths.dart';
 
-/// 钱包交易：`GET …/transactionHistory`、`transactionDetail`；SOL/XRP 为 **`address`+`crypto`** / **`txHash`+`crypto`**；wallet 仍带 `chain`（EVM/TRON 不变）。
+/// 钱包交易：`GET /api/app/wallet/transactionHistory`、`…/transactionDetail`（`address`+`chain`+可选 `coin`；详情为 `txHash`+`chain`+`crypto`）。
 class WalletTransactionService {
   WalletTransactionService({http.Client? httpClient})
       : _httpClient = httpClient ?? _defaultClient();
@@ -27,7 +27,6 @@ class WalletTransactionService {
     required String address,
     required String chain,
     String? coin,
-    String? chainType,
     String? xToken,
   }) async {
     try {
@@ -41,7 +40,6 @@ class WalletTransactionService {
               address: address,
               chain: chain,
               coin: coin,
-              chainType: chainType,
             ),
             headers: headers,
           )
@@ -88,7 +86,6 @@ class WalletTransactionService {
     required String txHash,
     required String chain,
     required String crypto,
-    String? chainType,
     String? xToken,
   }) async {
     try {
@@ -106,7 +103,6 @@ class WalletTransactionService {
               txHash: h,
               chain: chain,
               crypto: crypto,
-              chainType: chainType,
             ),
             headers: headers,
           )

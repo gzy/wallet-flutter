@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/app_chain_config.dart';
 import '../models/recent_recipient.dart';
 import '../models/stored_wallet.dart';
 import '../providers/wallet_controller.dart';
 import '../services/wallet/chain_rules.dart';
+import '../services/wallet/hd_wallet_service.dart';
 import '../theme/app_colors.dart';
 
 /// 地址簿页与设计稿对齐的局部色（不改动全局 [AppColors]）。
@@ -30,6 +32,9 @@ String _shortAddrForChain(String addr, ChainKind kind) {
     case ChainKind.tron:
     case ChainKind.solana:
     case ChainKind.xrp:
+    case ChainKind.btc:
+    case ChainKind.doge:
+    case ChainKind.ton:
       if (a.length <= 18) {
         return a;
       }
@@ -48,6 +53,12 @@ String _chainKindChipLabel(ChainKind kind) {
       return 'SOL';
     case ChainKind.xrp:
       return 'XRP';
+    case ChainKind.btc:
+      return 'BTC';
+    case ChainKind.doge:
+      return 'DOGE';
+    case ChainKind.ton:
+      return 'TON';
     case ChainKind.evm:
     case ChainKind.unknown:
       return 'EVM';
@@ -159,6 +170,7 @@ class _AddressBookScreenState extends State<AddressBookScreen>
           _MyWalletsTab(
             networkLabel: widget.networkLabel,
             chainKind: kind,
+            chainQuery: widget.chainQuery,
             onPickAddress: (hex) => Navigator.of(context).pop<String>(hex),
           ),
           _SavedContactsTab(symbol: widget.symbol),
@@ -350,11 +362,13 @@ class _MyWalletsTab extends StatelessWidget {
   const _MyWalletsTab({
     required this.networkLabel,
     required this.chainKind,
+    required this.chainQuery,
     required this.onPickAddress,
   });
 
   final String networkLabel;
   final ChainKind chainKind;
+  final String chainQuery;
   final ValueChanged<String> onPickAddress;
 
   @override
@@ -376,6 +390,7 @@ class _MyWalletsTab extends StatelessWidget {
           wallet: w,
           networkLabel: networkLabel,
           chainKind: chainKind,
+          chainQuery: chainQuery,
           onTap: onPickAddress,
         );
       },
@@ -388,12 +403,14 @@ class _WalletAddressTile extends StatefulWidget {
     required this.wallet,
     required this.networkLabel,
     required this.chainKind,
+    required this.chainQuery,
     required this.onTap,
   });
 
   final StoredWallet wallet;
   final String networkLabel;
   final ChainKind chainKind;
+  final String chainQuery;
   final ValueChanged<String> onTap;
 
   @override
@@ -423,6 +440,57 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
       case ChainKind.xrp:
         h = await wc.readXrpAddressForWallet(widget.wallet.id);
         break;
+      case ChainKind.ton:
+        {
+          AppChainConfig? cfg;
+          for (final c in wc.backendChains) {
+            if (c.walletApiChainQuery == widget.chainQuery) {
+              cfg = c;
+              break;
+            }
+          }
+          final testOnly =
+              cfg != null && HdWalletService.tonTestOnlyHeuristic(cfg);
+          h = await wc.readTonAddressForWallet(
+            widget.wallet.id,
+            testOnly: testOnly,
+          );
+        }
+        break;
+      case ChainKind.btc:
+        {
+          AppChainConfig? cfg;
+          for (final c in wc.backendChains) {
+            if (c.walletApiChainQuery == widget.chainQuery) {
+              cfg = c;
+              break;
+            }
+          }
+          final test =
+              cfg != null && HdWalletService.btcTestnetHeuristic(cfg);
+          h = await wc.readBtcAddressForWallet(
+            widget.wallet.id,
+            testnet: test,
+          );
+        }
+        break;
+      case ChainKind.doge:
+        {
+          AppChainConfig? cfg;
+          for (final c in wc.backendChains) {
+            if (c.walletApiChainQuery == widget.chainQuery) {
+              cfg = c;
+              break;
+            }
+          }
+          final test =
+              cfg != null && HdWalletService.dogeTestnetHeuristic(cfg);
+          h = await wc.readDogeAddressForWallet(
+            widget.wallet.id,
+            testnet: test,
+          );
+        }
+        break;
       case ChainKind.evm:
       case ChainKind.unknown:
         h = await wc.readAddressHexForWallet(widget.wallet.id);
@@ -440,7 +508,13 @@ class _WalletAddressTileState extends State<_WalletAddressTile> {
           ChainKind.evm ||
           ChainKind.unknown =>
             t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
-          ChainKind.tron || ChainKind.solana || ChainKind.xrp => t,
+          ChainKind.tron ||
+          ChainKind.solana ||
+          ChainKind.xrp ||
+          ChainKind.btc ||
+          ChainKind.doge ||
+          ChainKind.ton =>
+            t,
         };
       }
       _loading = false;

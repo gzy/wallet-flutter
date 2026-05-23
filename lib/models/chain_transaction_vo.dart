@@ -18,7 +18,7 @@ class ChainTransactionVo {
     this.transactionFee,
     this.feeCrypto,
     this.txLink,
-    this.addressLinkPrefix,
+    this.addressLink,
     this.tronBandwidth,
     this.tronEnergy,
     this.tronStakedEnergy,
@@ -44,7 +44,8 @@ class ChainTransactionVo {
   final double? transactionFee;
   final String? feeCrypto;
   final String? txLink;
-  final String? addressLinkPrefix;
+  /// 浏览器中打开「当前钱包地址」页的完整 URL（由 `transactionHistory` 等接口直接返回）。
+  final String? addressLink;
 
   /// TRON：带宽点数（与 estimateGas 等接口字段 `bandwidth` 对齐）。
   final int? tronBandwidth;
@@ -95,7 +96,7 @@ class ChainTransactionVo {
       transactionFee: (json['transactionFee'] as num?)?.toDouble(),
       feeCrypto: json['feeCrypto']?.toString(),
       txLink: json['txLink']?.toString(),
-      addressLinkPrefix: json['addressLinkPrefix']?.toString(),
+      addressLink: json['addressLink']?.toString(),
       tronBandwidth: _asInt(_tronPick(tron, const ['bandwidth', 'tronBandwidth'])),
       tronEnergy: _asInt(_tronPick(tron, const ['energy', 'tronEnergy'])),
       tronStakedEnergy: _asInt(_tronPick(tron, const ['stakedEnergy', 'staked_energy'])),
@@ -126,7 +127,7 @@ class ChainTransactionVo {
         'transactionFee': transactionFee,
         'feeCrypto': feeCrypto,
         'txLink': txLink,
-        'addressLinkPrefix': addressLinkPrefix,
+        'addressLink': addressLink,
         'tronBandwidth': tronBandwidth,
         'tronEnergy': tronEnergy,
         'tronStakedEnergy': tronStakedEnergy,

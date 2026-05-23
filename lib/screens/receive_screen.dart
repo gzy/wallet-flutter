@@ -128,10 +128,6 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   Widget build(BuildContext context) {
     final wallet = context.watch<WalletController>();
-    final evmAddress = wallet.addressHex;
-    final tronAddress = wallet.tronAddress;
-    final solanaAddress = wallet.solanaAddress;
-    final xrpAddress = wallet.xrpAddress;
     if (!wallet.hasWallet) {
       return Scaffold(
         backgroundColor: AppColors.background,
@@ -179,12 +175,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       orElse: () => wallet.backendChains.first,
     );
     final kind = ChainRules.kindForAppChain(cfg);
-    final address = switch (kind) {
-      ChainKind.tron => tronAddress,
-      ChainKind.solana => solanaAddress,
-      ChainKind.xrp => xrpAddress,
-      ChainKind.evm || ChainKind.unknown => evmAddress,
-    };
+    final address = wallet.ownerAddressForChainConfig(cfg);
     if (address == null || address.isEmpty) {
       return Scaffold(
         backgroundColor: AppColors.background,

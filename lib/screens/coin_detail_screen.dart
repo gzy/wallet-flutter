@@ -52,24 +52,46 @@ ChainKind _kindForCoin(WalletController wc, CoinData coin) {
   return _kindFromChainParam(wc, wc.chainParamForCoin(coin));
 }
 
-String? _walletAddrForKind(WalletController wc, ChainKind kind) {
-  switch (kind) {
-    case ChainKind.tron:
-      return wc.tronAddress;
-    case ChainKind.solana:
-      return wc.solanaAddress;
-    case ChainKind.xrp:
-      return wc.xrpAddress;
-    case ChainKind.evm:
-    case ChainKind.unknown:
-      return wc.addressHex;
+String? _walletAddrForCoin(WalletController wc, CoinData coin) {
+  final cfg = _appChainCfgForParam(wc, wc.chainParamForCoin(coin));
+  if (cfg != null) {
+    return wc.ownerAddressForChainConfig(cfg);
   }
+  final kind = _kindForCoin(wc, coin);
+  return switch (kind) {
+    ChainKind.tron => wc.tronAddress,
+    ChainKind.solana => wc.solanaAddress,
+    ChainKind.xrp => wc.xrpAddress,
+    ChainKind.btc => wc.btcMainnetAddress,
+    ChainKind.doge => wc.dogeMainnetAddress ?? wc.dogeTestnetAddress,
+    ChainKind.ton => wc.tonAddressMain ?? wc.tonAddressTest,
+    ChainKind.evm || ChainKind.unknown => wc.addressHex,
+  };
+}
+
+String _derivationPathForCoinSheet(BuildContext context, CoinData live) {
+  final wc = context.read<WalletController>();
+  final kind = _kindForCoin(wc, live);
+  return switch (kind) {
+    ChainKind.solana => kSolanaDefaultDerivationPath,
+    ChainKind.tron => kTronDefaultDerivationPath,
+    ChainKind.xrp => kXrpDefaultDerivationPath,
+    ChainKind.btc => () {
+          final cfg = _appChainCfgForParam(wc, wc.chainParamForCoin(live));
+          if (cfg == null) return kBtcMainnetBip84Path;
+          return HdWalletService.btcTestnetHeuristic(cfg)
+              ? kBtcTestnetBip84Path
+              : kBtcMainnetBip84Path;
+        }(),
+    ChainKind.doge => kDogeDefaultDerivationPath,
+    ChainKind.ton => kTonDefaultDerivationPath,
+    ChainKind.evm || ChainKind.unknown => kEthDefaultDerivationPath,
+  };
 }
 
 String _walletAddressSubtitle(WalletController wc, CoinData live) {
   final name = wc.activeWallet?.name;
-  final kind = _kindForCoin(wc, live);
-  final addr = _walletAddrForKind(wc, kind);
+  final addr = _walletAddrForCoin(wc, live);
   if (addr == null || addr.length < 10) {
     return name ?? '未连接钱包';
   }
@@ -126,13 +148,18 @@ Uri? _joinExplorerUrl(String? prefix, String pathTail) {
     return Uri.tryParse(p);
   }
   // 与 Solscan 等一致：`https://solscan.io/account/{address}?cluster=devnet`
-  final withAddr =
+  // 部分 EVM 浏览器模板使用圆括号占位，如 Basescan：`.../address/(address)`。
+  var withAddr =
       p.replaceAll(RegExp(r'\{address\}', caseSensitive: false), t);
+  withAddr =
+      withAddr.replaceAll(RegExp(r'\(address\)', caseSensitive: false), t);
   if (withAddr != p) {
     return Uri.tryParse(withAddr);
   }
-  final withTx =
+  var withTx =
       withAddr.replaceAll(RegExp(r'\{transaction\}', caseSensitive: false), t);
+  withTx =
+      withTx.replaceAll(RegExp(r'\(transaction\)', caseSensitive: false), t);
   if (withTx != withAddr) {
     return Uri.tryParse(withTx);
   }
@@ -176,6 +203,15 @@ String _coinNetworkSubtitle(CoinData live) {
   }
   if (kind == ChainKind.xrp) {
     return 'XRP';
+  }
+  if (kind == ChainKind.btc) {
+    return 'BTC';
+  }
+  if (kind == ChainKind.doge) {
+    return 'DOGE';
+  }
+  if (kind == ChainKind.ton) {
+    return 'TON';
   }
   return 'EVM';
 }
@@ -313,6 +349,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   bool _txLoading = false;
   String? _txError;
   int _txRequestGen = 0;
+  int _seenTxHistoryRefreshTick = 0;
   _TxChipFilter _txFilter = _TxChipFilter.all;
   bool _txShowTransactionsTab = true;
 
@@ -346,9 +383,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       if (chain.isEmpty) {
         throw StateError('缺少 chain 参数（请确认 /api/app/chains 已返回该资产对应链）');
       }
-      final chainType = _appChainCfgForParam(wc, chain)?.chainType;
       final kind = _kindForCoin(wc, live);
-      final raw = _walletAddrForKind(wc, kind) ?? '';
+      final raw = _walletAddrForCoin(wc, live) ?? '';
       final address =
           raw.isEmpty ? '' : ChainRules.formatAddressForUi(kind, raw);
       if (address.isEmpty) {
@@ -379,7 +415,6 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         address: address,
         chain: chain,
         coin: live.symbol,
-        chainType: chainType,
       );
       if (!mounted || gen != _txRequestGen) {
         return;
@@ -422,7 +457,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         try {
           final chain2 = wc.chainParamForCoin(live);
           final kind2 = _kindForCoin(wc, live);
-          final raw2 = _walletAddrForKind(wc, kind2) ?? '';
+          final raw2 = _walletAddrForCoin(wc, live) ?? '';
           final ad =
               raw2.isEmpty ? '' : ChainRules.formatAddressForUi(kind2, raw2);
           final sc = cache.transactionScopeKey(ad, chain2, live.symbol);
@@ -466,7 +501,13 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ChainKind.evm ||
       ChainKind.unknown =>
         t.startsWith('0x') || t.startsWith('0X') ? t : '0x$t',
-      ChainKind.tron || ChainKind.solana || ChainKind.xrp => t,
+      ChainKind.tron ||
+      ChainKind.solana ||
+      ChainKind.xrp ||
+      ChainKind.btc ||
+      ChainKind.doge ||
+      ChainKind.ton =>
+        t,
     };
     final link = _joinExplorerUrl(live.txUrlPrefix, h);
     if (link == null) {
@@ -477,7 +518,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     } catch (_) {}
   }
 
-  /// 列表底部「在区块浏览器中查看」：优先用接口返回的 [ChainTransactionVo.addressLinkPrefix]。
+  /// 列表底部「在区块浏览器中查看」：优先用接口返回的 [ChainTransactionVo.addressLink]（完整 URL）。
   Future<void> _openHistoryExplorerAddress(
     WalletController wc,
     CoinData live,
@@ -485,16 +526,16 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     List<ChainTransactionVo> apiVisible,
   ) async {
     final kind = _kindForCoin(wc, live);
-    final walletAddr = _walletAddrForKind(wc, kind);
+    final walletAddr = _walletAddrForCoin(wc, live);
     if (walletAddr == null) {
       return;
     }
     final normalized = ChainRules.formatAddressForUi(kind, walletAddr);
     if (useApiList && apiVisible.isNotEmpty) {
-      final p = apiVisible.first.addressLinkPrefix?.trim();
-      if (p != null && p.isNotEmpty) {
-        final uri = _joinExplorerUrl(p, normalized);
-        if (uri != null) {
+      final link = apiVisible.first.addressLink?.trim();
+      if (link != null && link.isNotEmpty) {
+        final uri = Uri.tryParse(link);
+        if (uri != null && uri.hasScheme) {
           try {
             await launchUrl(uri, mode: LaunchMode.externalApplication);
           } catch (_) {}
@@ -524,20 +565,24 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
       ),
     );
     final chain = wc.chainParamForCoin(live);
-    final chainType = _appChainCfgForParam(wc, chain)?.chainType;
     final kind = _kindForCoin(wc, live);
     final rawH = rawTxHash.trim();
     final h = switch (kind) {
       ChainKind.evm ||
       ChainKind.unknown =>
         rawH.startsWith('0x') || rawH.startsWith('0X') ? rawH : '0x$rawH',
-      ChainKind.tron || ChainKind.solana || ChainKind.xrp => rawH,
+      ChainKind.tron ||
+      ChainKind.solana ||
+      ChainKind.xrp ||
+      ChainKind.btc ||
+      ChainKind.doge ||
+      ChainKind.ton =>
+        rawH,
     };
     final detail = await _txDetailService.fetchTransactionDetail(
       txHash: h,
       chain: chain,
       crypto: live.symbol,
-      chainType: chainType,
     );
     if (!mounted) {
       return;
@@ -556,8 +601,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     String rawTxHash,
     ChainTransactionVo detail,
   ) {
-    final kind = _kindForCoin(wc, live);
-    final walletAddr = _walletAddrForKind(wc, kind);
+    final walletAddr = _walletAddrForCoin(wc, live);
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => WalletTransactionDetailScreen(
@@ -585,7 +629,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     final wc = context.read<WalletController>();
     final live = _liveCoin(wc, widget.coin);
     final kind = _kindForCoin(wc, live);
-    final raw = _walletAddrForKind(wc, kind);
+    final raw = _walletAddrForCoin(wc, live);
     if (raw == null || raw.trim().isEmpty) {
       return;
     }
@@ -599,14 +643,30 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
     );
   }
 
+  void _reloadTxsIfTransferCompleted(WalletController wc) {
+    final tick = wc.txHistoryRefreshTick;
+    if (tick == _seenTxHistoryRefreshTick) {
+      return;
+    }
+    _seenTxHistoryRefreshTick = tick;
+    if (tick > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(_loadTxs());
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final wc = context.watch<WalletController>();
+    _reloadTxsIfTransferCompleted(wc);
     final live = _liveCoin(wc, widget.coin);
     final hasChain = wc.chainParamForCoin(live).trim().isNotEmpty;
     final subtitle = _walletAddressSubtitle(wc, live);
     final kind = _kindForCoin(wc, live);
-    final walletAddr = _walletAddrForKind(wc, kind);
+    final walletAddr = _walletAddrForCoin(wc, live);
     final useApiList = _txsFromApi != null;
     final visibleTxsApi = (walletAddr == null || !useApiList)
         ? const <ChainTransactionVo>[]
@@ -1025,7 +1085,13 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         (wc.addressHex != null ||
                             wc.tronAddress != null ||
                             wc.solanaAddress != null ||
-                            wc.xrpAddress != null))
+                            wc.xrpAddress != null ||
+                            wc.tonAddressMain != null ||
+                            wc.tonAddressTest != null ||
+                            wc.btcMainnetAddress != null ||
+                            wc.btcTestnetAddress != null ||
+                            wc.dogeMainnetAddress != null ||
+                            wc.dogeTestnetAddress != null))
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -1057,7 +1123,7 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                                 const SizedBox(height: 18),
                                 TextButton(
                                   onPressed: () {
-                                    final h = _walletAddrForKind(wc, kind);
+                                    final h = _walletAddrForCoin(wc, live);
                                     if (h != null && h.isNotEmpty) {
                                       _openExplorerAddressForCoin(wc, live, h);
                                     }
@@ -1285,14 +1351,18 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                         color: Colors.transparent,
                         child: InkWell(
                           borderRadius: BorderRadius.circular(16),
-                          onTap: () {
+                          onTap: () async {
                             final wc = context.read<WalletController>();
-                            final chain = wc.chainParamForCoin(widget.coin);
-                            Navigator.of(context).push(
+                            final chain = wc.chainParamForCoin(live);
+                            final ok = await Navigator.of(context).push<bool>(
                               MaterialPageRoute(
-                                  builder: (_) =>
-                                      TransferScreen(initialChain: chain)),
+                                builder: (_) =>
+                                    TransferScreen(initialChain: chain),
+                              ),
                             );
+                            if (ok == true && mounted) {
+                              await _loadTxs();
+                            }
                           },
                           child: const Center(
                             child: Text(
@@ -1470,17 +1540,10 @@ class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
                       _SheetKVRow(
                         icon: Icons.vpn_key,
                         label: 'Path',
-                        value: switch (_kindForCoin(
-                          context.read<WalletController>(),
+                        value: _derivationPathForCoinSheet(
+                          context,
                           widget.live,
-                        )) {
-                          ChainKind.solana => kSolanaDefaultDerivationPath,
-                          ChainKind.tron => kTronDefaultDerivationPath,
-                          ChainKind.xrp => kXrpDefaultDerivationPath,
-                          ChainKind.evm ||
-                          ChainKind.unknown =>
-                            kEthDefaultDerivationPath,
-                        },
+                        ),
                       ),
                     ],
                   ),
@@ -1501,8 +1564,7 @@ class _CoinDetailMoreSheetState extends State<_CoinDetailMoreSheet> {
                           final nav = Navigator.of(context);
                           final wc = context.read<WalletController>();
                           nav.pop();
-                          final kind = _kindForCoin(wc, widget.live);
-                          final h = _walletAddrForKind(wc, kind);
+                          final h = _walletAddrForCoin(wc, widget.live);
                           if (h == null || h.isEmpty) {
                             return;
                           }

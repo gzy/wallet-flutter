@@ -3,6 +3,8 @@ class CoinData {
   final String id;
   final String symbol;
   final String name;
+
+  /// 历史字段；列表与详情图标由 [CoinIcon] 按 [symbol] 映射 `assets/coins`，此处写空串即可。
   final String icon;
   final String? network;
 

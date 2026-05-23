@@ -12,6 +12,63 @@ import 'app_database.dart';
 const _kChainList = 'cache_chains_v1';
 const _kPriceAll = 'cache_prices_v1';
 String _kEvmCoinsForWallet(String walletId) => 'evm_coins__$walletId';
+String _kDerivedAddressesForWallet(String walletId) =>
+    'derived_addrs_v1__$walletId';
+
+/// 各链展示/查余额用地址快照（无私钥），用于冷启动在助记词派生完成前先拉余额。
+class DerivedAddressSnapshot {
+  const DerivedAddressSnapshot({
+    required this.addressHex,
+    this.tronAddress,
+    this.solanaAddress,
+    this.xrpAddress,
+    this.tonAddressMain,
+    this.tonAddressTest,
+    this.btcMainnetAddress,
+    this.btcTestnetAddress,
+    this.dogeMainnetAddress,
+    this.dogeTestnetAddress,
+  });
+
+  final String addressHex;
+  final String? tronAddress;
+  final String? solanaAddress;
+  final String? xrpAddress;
+  final String? tonAddressMain;
+  final String? tonAddressTest;
+  final String? btcMainnetAddress;
+  final String? btcTestnetAddress;
+  final String? dogeMainnetAddress;
+  final String? dogeTestnetAddress;
+
+  Map<String, dynamic> toJson() => {
+        'addressHex': addressHex,
+        'tronAddress': tronAddress,
+        'solanaAddress': solanaAddress,
+        'xrpAddress': xrpAddress,
+        'tonAddressMain': tonAddressMain,
+        'tonAddressTest': tonAddressTest,
+        'btcMainnetAddress': btcMainnetAddress,
+        'btcTestnetAddress': btcTestnetAddress,
+        'dogeMainnetAddress': dogeMainnetAddress,
+        'dogeTestnetAddress': dogeTestnetAddress,
+      };
+
+  factory DerivedAddressSnapshot.fromJson(Map<String, dynamic> json) {
+    return DerivedAddressSnapshot(
+      addressHex: json['addressHex']?.toString() ?? '',
+      tronAddress: json['tronAddress']?.toString(),
+      solanaAddress: json['solanaAddress']?.toString(),
+      xrpAddress: json['xrpAddress']?.toString(),
+      tonAddressMain: json['tonAddressMain']?.toString(),
+      tonAddressTest: json['tonAddressTest']?.toString(),
+      btcMainnetAddress: json['btcMainnetAddress']?.toString(),
+      btcTestnetAddress: json['btcTestnetAddress']?.toString(),
+      dogeMainnetAddress: json['dogeMainnetAddress']?.toString(),
+      dogeTestnetAddress: json['dogeTestnetAddress']?.toString(),
+    );
+  }
+}
 
 String normalizeHexAddr(String a) {
   var s = a.trim();
@@ -70,6 +127,47 @@ class AppLocalCache {
           .whereType<Map<String, dynamic>>()
           .map((m) => AppChainConfig.fromJson(m))
           .toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // --- 派生地址快照（按钱包 id，无私钥） ---
+
+  Future<void> putDerivedAddresses(
+    String walletId,
+    DerivedAddressSnapshot snapshot,
+  ) async {
+    if (walletId.isEmpty || snapshot.addressHex.trim().isEmpty) {
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db
+        .into(_db.cacheEntries)
+        .insertOnConflictUpdate(CacheEntriesCompanion(
+          key: Value(_kDerivedAddressesForWallet(walletId)),
+          payload: Value(jsonEncode(snapshot.toJson())),
+          updatedAt: Value(now),
+        ));
+  }
+
+  Future<DerivedAddressSnapshot?> getDerivedAddresses(String walletId) async {
+    if (walletId.isEmpty) {
+      return null;
+    }
+    final r = await (_db.select(_db.cacheEntries)
+          ..where((e) => e.key.equals(_kDerivedAddressesForWallet(walletId))))
+        .getSingleOrNull();
+    if (r == null) {
+      return null;
+    }
+    try {
+      final m = jsonDecode(r.payload) as Map<String, dynamic>;
+      final snap = DerivedAddressSnapshot.fromJson(m);
+      if (snap.addressHex.trim().isEmpty) {
+        return null;
+      }
+      return snap;
     } catch (_) {
       return null;
     }
@@ -189,6 +287,20 @@ class AppLocalCache {
   }
 
   String _txMetaKey(String scope) => 'tx_meta__$scope';
+
+  /// 转账成功后丢弃该 scope 的列表缓存，避免详情页先展示旧列表再等待接口。
+  Future<void> clearTransactionHistory(String scope) async {
+    await _db.batch((b) {
+      b.deleteWhere(
+        _db.cachedTxs,
+        (t) => t.scopeKey.equals(scope),
+      );
+      b.deleteWhere(
+        _db.cacheEntries,
+        (e) => e.key.equals(_txMetaKey(scope)),
+      );
+    });
+  }
 
   Future<void> replaceTransactionHistory(
     String scope,

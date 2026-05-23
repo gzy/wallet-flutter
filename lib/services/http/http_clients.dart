@@ -14,6 +14,13 @@ class HttpClients {
 
   /// 与当前 [kWalletApiBase] 的 host 对齐；换环境时请同时配置 `WALLET_API_BASE` 与 pin。
   static Map<String, List<String>> get _pinsByHost {
+    const disablePin = bool.fromEnvironment(
+      'HTTP_DISABLE_SPKI_PINNING',
+      defaultValue: false,
+    );
+    if (disablePin) {
+      return {};
+    }
     final host = Uri.parse(kWalletApiBase).host;
     if (host.isEmpty) {
       return {};
