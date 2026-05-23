@@ -5,6 +5,7 @@ import '../../../models/app_chain_config.dart';
 import '../../../providers/wallet_controller.dart';
 import '../../../theme/app_colors.dart';
 import '../../../widgets/chain_icon.dart';
+import '../../coin_management_screen.dart';
 
 String _networkPillLabel(WalletController wc) {
   final q = wc.sendChain;
@@ -371,17 +372,30 @@ class WalletSearchBar extends StatelessWidget {
             },
           ),
           const SizedBox(width: 8),
-          Container(
-            width: 44,
-            height: 48,
-            decoration: BoxDecoration(
-              color: AppColors.surface,
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
               borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.more_vert,
-              color: AppColors.textSecondary,
-              size: 18,
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const CoinManagementScreen(),
+                  ),
+                );
+              },
+              child: Container(
+                width: 44,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.tune,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
+              ),
             ),
           ),
         ],

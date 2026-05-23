@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../models/recent_recipient.dart';
@@ -18,6 +20,7 @@ class SecureStorageService {
   static const _kPinFailCount = 'pin_fail_count_v1';
   static const _kPinLockUntilMs = 'pin_lock_until_ms_v1';
   static const _kPinSessionUnlockAtPrefix = 'pin_session_unlock_at_ms__';
+  static const _kPinBackgroundAtPrefix = 'pin_background_at_ms__';
 
   static const int _kMaxPinFailures = 5;
   static const Duration _kPinLockDuration = Duration(seconds: 30);
@@ -33,9 +36,13 @@ class SecureStorageService {
   String _mnemonicKey(String id) => 'wallet_mnemonic__$id';
   String _backedUpKey(String id) => 'wallet_backed_up__$id';
   String _hiddenCoinsKey(String id) => 'wallet_hidden_coins__$id';
+  String _coinOrderKey(String id) => 'wallet_coin_order__$id';
   String _recentRecipientsKey(String id) => 'wallet_recent_recipients__$id';
   String _pinSessionUnlockAtKey(String walletId) =>
       '$_kPinSessionUnlockAtPrefix$walletId';
+
+  String _pinBackgroundAtKey(String walletId) =>
+      '$_kPinBackgroundAtPrefix$walletId';
 
   /// 用于“卸载重装后首次启动”场景：Keychain 默认不会随卸载清空，
   /// 因此重装后需要主动清理钱包相关条目，避免旧钱包被恢复出来。
@@ -59,6 +66,7 @@ class SecureStorageService {
       if (key.startsWith('wallet_hidden_coins__')) return true;
       if (key.startsWith('wallet_recent_recipients__')) return true;
       if (key.startsWith(_kPinSessionUnlockAtPrefix)) return true;
+      if (key.startsWith(_kPinBackgroundAtPrefix)) return true;
       return false;
     }
 
@@ -106,6 +114,7 @@ class SecureStorageService {
     await _storage.delete(key: _mnemonicKey(id), iOptions: _iosOptions);
     await _storage.delete(key: _backedUpKey(id), iOptions: _iosOptions);
     await _storage.delete(key: _hiddenCoinsKey(id), iOptions: _iosOptions);
+    await _storage.delete(key: _coinOrderKey(id), iOptions: _iosOptions);
     await _storage.delete(key: _recentRecipientsKey(id), iOptions: _iosOptions);
   }
 
@@ -241,6 +250,28 @@ class SecureStorageService {
         key: _hiddenCoinsKey(id), value: json, iOptions: _iosOptions);
   }
 
+  Future<List<String>> readCoinOrderForWallet(String id) async {
+    final raw =
+        await _storage.read(key: _coinOrderKey(id), iOptions: _iosOptions);
+    if (raw == null || raw.isEmpty) {
+      return const [];
+    }
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.map((e) => e.toString()).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> writeCoinOrderForWallet(String id, List<String> order) async {
+    await _storage.write(
+      key: _coinOrderKey(id),
+      value: jsonEncode(order),
+      iOptions: _iosOptions,
+    );
+  }
+
   Future<bool> readBackedUpForWallet(String id) async {
     final v = await _storage.read(key: _backedUpKey(id), iOptions: _iosOptions);
     return v == 'true';
@@ -268,11 +299,61 @@ class SecureStorageService {
         key: _kPinLockUntilMs, value: '0', iOptions: _iosOptions);
   }
 
-  /// 上次成功解锁会话的时间戳（毫秒），按钱包维度存储。
+  /// 进入后台时记录的时间戳（毫秒），按钱包维度存储。
   ///
-  /// 用于“30 分钟内免输 PIN”：
-  /// - 切后台即上锁
-  /// - 回前台时若距上次解锁 <= 30 分钟，则自动恢复解锁态
+  /// 进程仍存活、从后台回前台时：若「当前时间 − 该时间」> 30 分钟，则要求重新输入 PIN。
+  /// 冷启动（进程被杀后重新打开）不读此值，一律要求 PIN。
+  Future<int?> readPinBackgroundAtMs(String walletId) async {
+    final raw = await _storage.read(
+      key: _pinBackgroundAtKey(walletId),
+      iOptions: _iosOptions,
+    );
+    final v = int.tryParse(raw ?? '');
+    return v == null || v <= 0 ? null : v;
+  }
+
+  /// iOS Keychain 在并发 `write` 同一 key 时可能抛 `-25299`（item already exists）。
+  Future<void> _writeSecureReplacing(String key, String value) async {
+    try {
+      await _storage.delete(key: key, iOptions: _iosOptions);
+    } catch (_) {
+      // 不存在时 delete 可能失败，忽略
+    }
+    try {
+      await _storage.write(key: key, value: value, iOptions: _iosOptions);
+    } on PlatformException catch (e) {
+      final code = e.code;
+      final msg = e.message ?? '';
+      if (code == '-25299' || msg.contains('already exists')) {
+        await _storage.delete(key: key, iOptions: _iosOptions);
+        await _storage.write(key: key, value: value, iOptions: _iosOptions);
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> writePinBackgroundAtMs(String walletId, int atMs) async {
+    await _writeSecureReplacing(
+      _pinBackgroundAtKey(walletId),
+      atMs.toString(),
+    );
+  }
+
+  Future<void> clearPinBackgroundAtMs(String walletId) async {
+    try {
+      await _storage.delete(
+        key: _pinBackgroundAtKey(walletId),
+        iOptions: _iosOptions,
+      );
+    } on PlatformException catch (e) {
+      if (kDebugMode) {
+        debugPrint('clearPinBackgroundAtMs: ${e.code} ${e.message}');
+      }
+    }
+  }
+
+  /// 上次成功解锁会话的时间戳（毫秒），按钱包维度存储（切换钱包等场景可复用）。
   Future<int?> readPinSessionUnlockAtMs(String walletId) async {
     final raw = await _storage.read(
       key: _pinSessionUnlockAtKey(walletId),

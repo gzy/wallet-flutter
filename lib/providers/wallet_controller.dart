@@ -20,7 +20,10 @@ import '../services/wallet/chain_rules.dart';
 import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/mnemonic_service.dart';
 import '../services/wallet/secure_storage_service.dart';
+import '../services/debug/home_refresh_profiler.dart';
+import '../services/wallet/btc_backend_transfer.dart';
 import '../services/wallet/solana_backend_transfer.dart';
+import '../services/wallet/ton_backend_transfer.dart';
 import '../services/wallet/xrp_backend_transfer.dart';
 import '../services/wallet/wallet_transfer_api_service.dart';
 import '../services/wallet/wallet_transaction_service.dart';
@@ -62,6 +65,12 @@ class WalletController extends ChangeNotifier {
   String? _tronAddress;
   String? _solanaAddress;
   String? _xrpAddress;
+  String? _tonAddressMain;
+  String? _tonAddressTest;
+  String? _btcMainnetAddress;
+  String? _btcTestnetAddress;
+  String? _dogeMainnetAddress;
+  String? _dogeTestnetAddress;
   bool _backedUp = false;
   bool _loading = false;
 
@@ -72,11 +81,17 @@ class WalletController extends ChangeNotifier {
   bool _sessionUnlocked = true;
   bool _initReady = false;
   bool _appInBackground = false;
-  static const Duration _pinGraceDuration = Duration(minutes: 30);
-  int? _lastSessionUnlockAtMs;
+  /// 离开 App 进入后台后，超过该时长再回前台需重新输入 PIN。
+  static const Duration _pinBackgroundGraceDuration = Duration(minutes: 30);
+  int? _lastBackgroundedAtMs;
 
   List<CoinData> _evmCoins = [];
   Set<String> _hiddenCoinIds = <String>{};
+  List<String> _coinOrderIds = [];
+
+  /// 转账成功后递增；币种详情等监听此值以刷新交易列表。
+  int _txHistoryRefreshTick = 0;
+  int get txHistoryRefreshTick => _txHistoryRefreshTick;
 
   /// 启动时由 [ChainsService] 拉取，供后续对接 `/api/app/wallet/balance` 等（`chain` 参数与 [AppChainConfig.walletApiChainQuery] 对齐）。
   List<AppChainConfig> _backendChains = [];
@@ -88,14 +103,103 @@ class WalletController extends ChangeNotifier {
   String? get tronAddress => _tronAddress;
   String? get solanaAddress => _solanaAddress;
   String? get xrpAddress => _xrpAddress;
+  String? get tonAddressMain => _tonAddressMain;
+  String? get tonAddressTest => _tonAddressTest;
+  String? get btcMainnetAddress => _btcMainnetAddress;
+  String? get btcTestnetAddress => _btcTestnetAddress;
+  String? get dogeMainnetAddress => _dogeMainnetAddress;
+  String? get dogeTestnetAddress => _dogeTestnetAddress;
+
+  /// 按链配置（浏览器 / chainCode）选择主网或测试网 BIP84 地址。
+  String? btcAddressForChainConfig(AppChainConfig cfg) =>
+      _btcOwnerAddressFor(cfg);
+
+  /// 转账/校验「付款地址」：与 [_loadCoinsForChainConfig] 的 owner 规则一致。
+  String? ownerAddressForChainConfig(AppChainConfig cfg) {
+    final kind = ChainRules.kindForAppChain(cfg);
+    return switch (kind) {
+      ChainKind.tron => _tronAddress,
+      ChainKind.solana => _solanaAddress,
+      ChainKind.xrp => _xrpAddress,
+      ChainKind.ton => HdWalletService.tonTestOnlyHeuristic(cfg)
+          ? _tonAddressTest
+          : _tonAddressMain,
+      ChainKind.btc => _btcOwnerAddressFor(cfg),
+      ChainKind.doge => _dogeOwnerAddressFor(cfg),
+      ChainKind.evm || ChainKind.unknown => _addressHex,
+    };
+  }
+
   EthereumAddress? get address =>
       _addressHex == null ? null : EthereumAddress.fromHex(_addressHex!);
   bool get backedUp => _backedUp;
   bool get loading => _loading;
   String? get sendChain => _sendChain;
-  List<CoinData> get evmCoins => List.unmodifiable(_evmCoins);
+  /// 首页/转账等：按用户排序，且排除已隐藏币种。
+  List<CoinData> get evmCoins => List.unmodifiable(
+        _sortedCoins(
+          _evmCoins
+              .where((c) => c.id.isEmpty || isCoinVisible(c.id))
+              .toList(),
+        ),
+      );
+
+  /// 币种管理页：含隐藏项，顺序与 [evmCoins] 一致规则。
+  List<CoinData> get allEvmCoins => List.unmodifiable(_sortedCoins(_evmCoins));
+
   bool isCoinVisible(String coinId) => !_hiddenCoinIds.contains(coinId);
   Set<String> get hiddenCoinIds => Set.unmodifiable(_hiddenCoinIds);
+
+  void _reconcileCoinOrderWithCoins(List<CoinData> coins) {
+    final ids = coins
+        .map((c) => c.id)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final idSet = ids.toSet();
+    final next = <String>[];
+    for (final id in _coinOrderIds) {
+      if (idSet.contains(id)) {
+        next.add(id);
+      }
+    }
+    for (final id in ids) {
+      if (!next.contains(id)) {
+        next.add(id);
+      }
+    }
+    _coinOrderIds = next;
+  }
+
+  List<CoinData> _sortedCoins(List<CoinData> coins) {
+    if (coins.isEmpty) {
+      return const [];
+    }
+    _reconcileCoinOrderWithCoins(coins);
+    final byId = <String, CoinData>{
+      for (final c in coins)
+        if (c.id.isNotEmpty) c.id: c,
+    };
+    final ordered = <CoinData>[];
+    for (final id in _coinOrderIds) {
+      final c = byId[id];
+      if (c != null) {
+        ordered.add(c);
+      }
+    }
+    for (final c in coins) {
+      if (c.id.isEmpty) {
+        ordered.add(c);
+      } else if (!ordered.any((x) => x.id == c.id)) {
+        ordered.add(c);
+      }
+    }
+    return ordered;
+  }
+
+  void _assignEvmCoins(List<CoinData> coins) {
+    _evmCoins = List<CoinData>.from(coins);
+    _reconcileCoinOrderWithCoins(_evmCoins);
+  }
 
   List<StoredWallet> get wallets => List.unmodifiable(_wallets);
   String? get activeWalletId => _activeWalletId;
@@ -113,19 +217,42 @@ class WalletController extends ChangeNotifier {
   bool get initReady => _initReady;
   bool get appInBackground => _appInBackground;
 
-  bool _isWithinPinGrace(int nowMs) {
-    final at = _lastSessionUnlockAtMs;
-    if (at == null || at <= 0) return false;
-    return nowMs - at <= _pinGraceDuration.inMilliseconds;
+  /// 自 [backgroundedAtMs] 起是否已在后台超过 [_pinBackgroundGraceDuration]。
+  bool _exceededBackgroundPinGrace(int nowMs, int? backgroundedAtMs) {
+    if (backgroundedAtMs == null || backgroundedAtMs <= 0) {
+      return false;
+    }
+    return nowMs - backgroundedAtMs > _pinBackgroundGraceDuration.inMilliseconds;
   }
 
-  Future<void> _loadPinGraceForActiveWallet() async {
+  Future<int?> _readBackgroundAtForActiveWallet() async {
     final wid = _activeWalletId;
     if (wid == null) {
-      _lastSessionUnlockAtMs = null;
+      return null;
+    }
+    return _storage.readPinBackgroundAtMs(wid);
+  }
+
+  Future<void> _clearBackgroundAtForActiveWallet() async {
+    final wid = _activeWalletId;
+    if (wid == null) {
       return;
     }
-    _lastSessionUnlockAtMs = await _storage.readPinSessionUnlockAtMs(wid);
+    _lastBackgroundedAtMs = null;
+    await _storage.clearPinBackgroundAtMs(wid);
+  }
+
+  Future<void> _persistBackgroundAtForActiveWallet(int atMs) async {
+    final wid = _activeWalletId;
+    if (wid == null) {
+      return;
+    }
+    _lastBackgroundedAtMs = atMs;
+    try {
+      await _storage.writePinBackgroundAtMs(wid, atMs);
+    } catch (e, st) {
+      debugPrint('writePinBackgroundAtMs: $e\n$st');
+    }
   }
 
   /// 生命周期：进入后台/不可见时调用。
@@ -133,9 +260,16 @@ class WalletController extends ChangeNotifier {
   /// 需求：切后台时不要显示 PIN，也不要黑屏（App 切换器里保持正常页面快照）。
   /// 因此只标记后台态，用于在 UI 层抑制 UnlockScreen；
   /// 同时**不**在这里把 [_sessionUnlocked] 置为 false，否则 `_HomeShell` 会渲染纯色底导致切换器快照变黑。
-  /// “上锁”的动作延迟到回前台时判断（若已超 30 分钟才真正进入锁屏态）。
+  /// 记录进入后台的时刻；回前台时再判断后台是否已超过 30 分钟。
   void onAppBackgrounded() {
+    // inactive → paused 会连续回调，仅首次进入后台时写 Keychain，避免并发 write 触发 -25299。
+    final enteringBackground = !_appInBackground;
     _appInBackground = true;
+    if (enteringBackground && _pinEnabled && _credentials != null) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _lastBackgroundedAtMs = now;
+      unawaited(_persistBackgroundAtForActiveWallet(now));
+    }
     notifyListeners();
   }
 
@@ -143,9 +277,9 @@ class WalletController extends ChangeNotifier {
   ///
   /// 规则：
   /// - 切后台时不展示 PIN、不黑屏（保持切换器快照）
-  /// - 回前台时再判断：30 分钟内免 PIN，否则进入锁屏态要求输入 PIN
+  /// - 回前台时：若本次在后台超过 30 分钟则要求输入 PIN，否则保持解锁
   /// - 一直前台不自动上锁（无定时器）
-  void onAppResumed() {
+  Future<void> onAppResumed() async {
     if (!_pinEnabled || _credentials == null) {
       if (_appInBackground) {
         _appInBackground = false;
@@ -154,8 +288,13 @@ class WalletController extends ChangeNotifier {
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    // 回前台再决定是否需要锁屏（避免切换器黑屏/闪 PIN）
-    _sessionUnlocked = _isWithinPinGrace(now);
+    final bgAt =
+        _lastBackgroundedAtMs ?? await _readBackgroundAtForActiveWallet();
+    if (_exceededBackgroundPinGrace(now, bgAt)) {
+      _sessionUnlocked = false;
+    } else {
+      unawaited(_clearBackgroundAtForActiveWallet());
+    }
     _appInBackground = false;
     notifyListeners();
     if (_sessionUnlocked) {
@@ -287,40 +426,468 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  String _cryptoListIcon(String symbol) {
-    switch (symbol.toUpperCase()) {
-      case 'ETH':
-        return '⚪';
-      case 'USDT':
-        return '₮';
-      case 'BTC':
-        return '₿';
-      default:
-        final u = symbol.toUpperCase();
-        return u.isEmpty ? '◆' : u.substring(0, 1);
+  String? _btcOwnerAddressFor(AppChainConfig chainCfg) {
+    if (HdWalletService.btcTestnetHeuristic(chainCfg)) {
+      return _btcTestnetAddress;
+    }
+    return _btcMainnetAddress;
+  }
+
+  String? _dogeOwnerAddressFor(AppChainConfig chainCfg) {
+    if (HdWalletService.dogeTestnetHeuristic(chainCfg)) {
+      return _dogeTestnetAddress;
+    }
+    return _dogeMainnetAddress;
+  }
+
+  /// 余额接口返回 null/空列表，或 `cryptos` 未标 `isNative == 1` 时，用链元数据生成至少一条原生占位，避免选网后列表空白。
+  List<CoinData> _nativePlaceholderCoinsForChain(
+    AppChainConfig chainCfg,
+    Map<String, AppSymbolQuote> quotes,
+    int? chainIdInt,
+  ) {
+    final chainParam = chainCfg.walletApiChainQuery;
+    final coins = <CoinData>[];
+    final seen = <String>{};
+    Iterable<AppChainCrypto> natives =
+        chainCfg.cryptos.where((c) => c.isNative == 1);
+    if (natives.isEmpty && chainCfg.cryptos.length == 1) {
+      natives = chainCfg.cryptos;
+    }
+    void addOne(String symRaw, String? nameFromMeta) {
+      final u = symRaw.trim().toUpperCase();
+      if (u.isEmpty) {
+        return;
+      }
+      final key = '${chainCfg.backendStableSegment}_$u';
+      if (!seen.add(key)) {
+        return;
+      }
+      final pair = AppPriceService.usdtPairKeyForSymbol(u);
+      final q = AppPriceService.resolveQuote(u, quotes[pair]);
+      coins.add(
+        CoinData(
+          id: chainCfg.coinPrimaryId(u),
+          symbol: u,
+          name: (nameFromMeta ?? '').trim().isNotEmpty
+              ? nameFromMeta!.trim()
+              : u,
+          icon: '',
+          network: chainCfg.chainName,
+          chainId: chainIdInt,
+          walletApiChainQuery: chainParam,
+          txUrlPrefix: chainCfg.txUrlPrefix,
+          addressUrlPrefix: chainCfg.addressUrlPrefix,
+          price: q.price,
+          priceChange24h: q.change24h,
+          balance: 0.0,
+          balanceUSD: 0.0,
+        ),
+      );
+    }
+
+    for (final c in natives) {
+      final sym = c.crypto.trim();
+      if (sym.isEmpty) {
+        continue;
+      }
+      addOne(sym, c.cryptoName);
+    }
+    if (coins.isEmpty) {
+      final fb = chainCfg.symbol.trim();
+      if (fb.isNotEmpty) {
+        final cn = chainCfg.chainName.trim();
+        addOne(fb, cn.isNotEmpty ? cn : null);
+      }
+    }
+    return coins;
+  }
+
+  /// 该链用于余额查询的地址；无则 `null` 或空串。
+  String? _ownerAddressStringForChain(AppChainConfig chainCfg) {
+    final kind = ChainRules.kindForAppChain(chainCfg);
+    final owner = switch (kind) {
+      ChainKind.tron => _tronAddress ?? '',
+      ChainKind.solana => _solanaAddress ?? '',
+      ChainKind.xrp => _xrpAddress ?? '',
+      ChainKind.ton => HdWalletService.tonTestOnlyHeuristic(chainCfg)
+          ? (_tonAddressTest ?? '')
+          : (_tonAddressMain ?? ''),
+      ChainKind.btc => _btcOwnerAddressFor(chainCfg) ?? '',
+      ChainKind.doge => _dogeOwnerAddressFor(chainCfg) ?? '',
+      ChainKind.evm || ChainKind.unknown =>
+        _credentials?.address.hex ?? _addressHex ?? '',
+    };
+    final t = owner.trim();
+    return t.isEmpty ? null : t;
+  }
+
+  bool _chainsListEquivalent(
+    List<AppChainConfig> a,
+    List<AppChainConfig> b,
+  ) {
+    if (a.length != b.length) {
+      return false;
+    }
+    String key(AppChainConfig c) =>
+        (c.chainCode ?? c.chainId).trim().toUpperCase();
+    final ak = a.map(key).toList()..sort();
+    final bk = b.map(key).toList()..sort();
+    for (var i = 0; i < ak.length; i++) {
+      if (ak[i] != bk[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// 网络拉取链列表；有缓存时可在后台执行，更新后可选再刷余额。
+  Future<void> _loadBackendChainsFromNetwork({
+    required bool refreshBalancesIfChanged,
+  }) async {
+    HomeRefreshProfiler.mark('before GET /api/app/chains (network)');
+    final list = await _chainsService.fetchChains();
+    HomeRefreshProfiler.mark(
+      'GET /api/app/chains network (${list.length} chains)',
+    );
+    if (list.isNotEmpty) {
+      final changed = !_chainsListEquivalent(_backendChains, list);
+      _backendChains = list;
+      unawaited(_localCache?.putChains(list));
+      _ensureSendChainDefault();
+      if (changed) {
+        notifyListeners();
+      }
+      if (changed &&
+          refreshBalancesIfChanged &&
+          _initReady &&
+          _credentials != null &&
+          (!_pinEnabled || _sessionUnlocked)) {
+        unawaited(refreshBalances());
+      }
+      if (kDebugMode && _backendChains.isNotEmpty) {
+        debugPrint('WalletController: backend chains ${_backendChains.length}');
+      }
+    } else if (_backendChains.isEmpty) {
+      final cached = await _localCache?.getChains();
+      if (cached != null && cached.isNotEmpty) {
+        _backendChains = cached;
+        _ensureSendChainDefault();
+        notifyListeners();
+      }
     }
   }
 
-  /// 拉取单条链的余额并组装 [CoinData]；`null` 表示无主地址或接口失败（全量刷新时跳过该链；单链刷新时保留旧数据）。
+  void _applyDerivedAddressSnapshot(DerivedAddressSnapshot snap) {
+    _addressHex = snap.addressHex;
+    _tronAddress = snap.tronAddress;
+    _solanaAddress = snap.solanaAddress;
+    _xrpAddress = snap.xrpAddress;
+    _tonAddressMain = snap.tonAddressMain;
+    _tonAddressTest = snap.tonAddressTest;
+    _btcMainnetAddress = snap.btcMainnetAddress;
+    _btcTestnetAddress = snap.btcTestnetAddress;
+    _dogeMainnetAddress = snap.dogeMainnetAddress;
+    _dogeTestnetAddress = snap.dogeTestnetAddress;
+  }
+
+  DerivedAddressSnapshot _derivedAddressSnapshotFromState() {
+    return DerivedAddressSnapshot(
+      addressHex: _addressHex ?? '',
+      tronAddress: _tronAddress,
+      solanaAddress: _solanaAddress,
+      xrpAddress: _xrpAddress,
+      tonAddressMain: _tonAddressMain,
+      tonAddressTest: _tonAddressTest,
+      btcMainnetAddress: _btcMainnetAddress,
+      btcTestnetAddress: _btcTestnetAddress,
+      dogeMainnetAddress: _dogeMainnetAddress,
+      dogeTestnetAddress: _dogeTestnetAddress,
+    );
+  }
+
+  /// 拉取行情并输出 `[HomeRefresh] POST /api/app/price/all` 耗时；失败时用本地缓存。
+  Future<Map<String, AppSymbolQuote>> _fetchPriceQuotesForHomeRefresh() async {
+    HomeRefreshProfiler.mark('before POST /api/app/price/all');
+    final sw = Stopwatch()..start();
+    var quotes = await _appPriceService.fetchAllPrices();
+    sw.stop();
+    var usedCache = false;
+    final requestFailed = quotes.isEmpty;
+    if (quotes.isEmpty) {
+      final cachedQ = await _localCache?.getPriceQuotes();
+      if (cachedQ != null && cachedQ.isNotEmpty) {
+        quotes = cachedQ;
+        usedCache = true;
+      }
+    }
+    HomeRefreshProfiler.logPriceFetchDone(
+      wallMs: sw.elapsedMilliseconds,
+      pairCount: quotes.length,
+      usedCacheFallback: usedCache,
+      requestFailed: requestFailed && !usedCache,
+    );
+    return quotes;
+  }
+
+  List<BatchBalanceRequestItem> _batchBalanceRequestItems(
+    Iterable<AppChainConfig> chains,
+  ) {
+    final items = <BatchBalanceRequestItem>[];
+    for (final chainCfg in chains) {
+      final chainParam = chainCfg.walletApiChainQuery.trim();
+      if (chainParam.isEmpty) {
+        continue;
+      }
+      final owner = _ownerAddressStringForChain(chainCfg);
+      if (owner == null) {
+        continue;
+      }
+      items.add(
+        BatchBalanceRequestItem(
+          address: owner,
+          chain: chainParam,
+        ),
+      );
+    }
+    return items;
+  }
+
+  BatchWalletBalanceResult? _batchResultForChain(
+    AppChainConfig chainCfg,
+    List<BatchWalletBalanceResult> results,
+  ) {
+    final want = chainCfg.walletApiChainQuery.trim().toUpperCase();
+    for (final r in results) {
+      if ((r.chain ?? '').trim().toUpperCase() == want) {
+        return r;
+      }
+    }
+    return null;
+  }
+
+  List<CoinData> _coinDataFromBalanceEntries(
+    AppChainConfig chainCfg,
+    List<WalletBalanceEntry> remote,
+    Map<String, AppSymbolQuote> quotes,
+  ) {
+    final chainParam = chainCfg.walletApiChainQuery;
+    final kind = ChainRules.kindForAppChain(chainCfg);
+    final chainIdInt =
+        kind == ChainKind.evm ? int.tryParse(chainCfg.chainId) : null;
+    final coins = <CoinData>[];
+    final seen = <String>{};
+    for (final row in remote) {
+      final sym = row.crypto?.trim() ?? '';
+      if (sym.isEmpty) {
+        continue;
+      }
+      final key = '${chainCfg.backendStableSegment}_${sym.toUpperCase()}';
+      if (!seen.add(key)) {
+        continue;
+      }
+      AppChainCrypto? meta;
+      for (final x in chainCfg.cryptos) {
+        if (x.crypto.toUpperCase() == sym.toUpperCase()) {
+          meta = x;
+          break;
+        }
+      }
+      final pair = AppPriceService.usdtPairKeyForSymbol(sym);
+      final q = AppPriceService.resolveQuote(sym, quotes[pair]);
+      final bal = row.balance;
+      coins.add(
+        CoinData(
+          id: chainCfg.coinPrimaryId(sym),
+          symbol: sym.toUpperCase(),
+          name: meta?.cryptoName ?? sym.toUpperCase(),
+          icon: '',
+          network: chainCfg.chainName,
+          chainId: chainIdInt,
+          walletApiChainQuery: chainParam,
+          txUrlPrefix: chainCfg.txUrlPrefix,
+          addressUrlPrefix: chainCfg.addressUrlPrefix,
+          price: q.price,
+          priceChange24h: q.change24h,
+          balance: bal,
+          balanceUSD: bal * q.price,
+        ),
+      );
+    }
+    return coins;
+  }
+
+  /// 将批量接口单项或失败结果转为 [CoinData] 列表；`null` 表示该链应跳过。
+  List<CoinData>? _coinsForChainFromBatchRow(
+    AppChainConfig chainCfg,
+    BatchWalletBalanceResult? batchRow,
+    Map<String, AppSymbolQuote> quotes,
+  ) {
+    if (batchRow != null && batchRow.success && batchRow.balances.isNotEmpty) {
+      return _coinDataFromBalanceEntries(chainCfg, batchRow.balances, quotes);
+    }
+    final kind = ChainRules.kindForAppChain(chainCfg);
+    final owner = _ownerAddressStringForChain(chainCfg);
+    if (owner == null) {
+      if (kind == ChainKind.ton) {
+        return _nativePlaceholderCoinsForChain(chainCfg, quotes, null);
+      }
+      return null;
+    }
+    final chainIdInt =
+        kind == ChainKind.evm ? int.tryParse(chainCfg.chainId) : null;
+    return _nativePlaceholderCoinsForChain(chainCfg, quotes, chainIdInt);
+  }
+
+  /// 仅请求 `POST /api/app/wallet/balances/batch`（可与行情并行）。
+  Future<List<BatchWalletBalanceResult>?> _fetchBalancesBatchResults(
+    List<AppChainConfig> backendChains,
+  ) async {
+    final items = _batchBalanceRequestItems(backendChains);
+    if (items.isEmpty) {
+      return null;
+    }
+    HomeRefreshProfiler.mark(
+      'before POST /api/app/wallet/balances/batch (${items.length} items)',
+    );
+    final sw = Stopwatch()..start();
+    final batchResults =
+        await _walletBalanceService.fetchBalancesBatch(items: items);
+    sw.stop();
+    if (batchResults == null) {
+      if (kDebugMode) {
+        debugPrint('[HomeRefresh] POST balances/batch failed, will fallback');
+      }
+      return null;
+    }
+    final balanceRowCount = batchResults.fold<int>(
+      0,
+      (n, r) => n + r.balances.length,
+    );
+    HomeRefreshProfiler.logBalanceBatchDone(
+      wallMs: sw.elapsedMilliseconds,
+      chainCount: batchResults.length,
+      perChainMs: {'POST balances/batch': sw.elapsedMilliseconds},
+      mode: 'POST balances/batch',
+      balanceRowCount: balanceRowCount,
+    );
+    if (kDebugMode) {
+      for (final r in batchResults) {
+        debugPrint(
+          '[HomeRefresh] batch chain=${r.chain} success=${r.success} '
+          'n=${r.balances.length}'
+          '${r.errorMessage != null ? " err=${r.errorMessage}" : ""}',
+        );
+      }
+    }
+    return batchResults;
+  }
+
+  Future<({List<CoinData> coins, bool anyOk})> _mergeBatchBalanceResults(
+    List<AppChainConfig> backendChains,
+    List<BatchWalletBalanceResult>? batchResults,
+    Map<String, AppSymbolQuote> quotes,
+  ) async {
+    if (batchResults == null) {
+      return (coins: <CoinData>[], anyOk: false);
+    }
+    final coins = <CoinData>[];
+    final seen = <String>{};
+    var anyOk = false;
+    for (final chainCfg in backendChains) {
+      final row = _batchResultForChain(chainCfg, batchResults);
+      final partial = _coinsForChainFromBatchRow(chainCfg, row, quotes);
+      if (partial == null) {
+        continue;
+      }
+      if (row != null && row.success && row.balances.isNotEmpty) {
+        anyOk = true;
+      } else if (partial.isNotEmpty) {
+        anyOk = true;
+      }
+      for (final cd in partial) {
+        final key =
+            '${chainCfg.backendStableSegment}_${cd.symbol.toUpperCase()}';
+        if (!seen.add(key)) {
+          continue;
+        }
+        coins.add(cd);
+      }
+    }
+    return (coins: coins, anyOk: anyOk);
+  }
+
+  Future<({List<CoinData> coins, bool anyOk})> _refreshCoinsViaPerChainBalance(
+    List<AppChainConfig> backendChains,
+    Map<String, AppSymbolQuote> quotes,
+  ) async {
+    final coins = <CoinData>[];
+    final seen = <String>{};
+    var anyOk = false;
+    HomeRefreshProfiler.mark(
+      'before per-chain GET balance (${backendChains.length} chains, parallel)',
+    );
+    final balanceBatchSw = Stopwatch()..start();
+    final perChainMs = <String, int>{};
+    final chainResults = await Future.wait(
+      backendChains.map((chainCfg) async {
+        final q = chainCfg.walletApiChainQuery;
+        final sw = Stopwatch()..start();
+        final partial = await _loadCoinsForChainConfig(chainCfg, quotes);
+        perChainMs[q] = sw.elapsedMilliseconds;
+        if (kDebugMode) {
+          debugPrint(
+            '[HomeRefresh] GET /api/app/wallet/balance?chain=$q '
+            '${sw.elapsedMilliseconds}ms '
+            '${partial == null ? 'skip' : '${partial.length} coins'}',
+          );
+        }
+        return (chainCfg, partial);
+      }),
+    );
+    balanceBatchSw.stop();
+    HomeRefreshProfiler.logBalanceBatchDone(
+      wallMs: balanceBatchSw.elapsedMilliseconds,
+      chainCount: backendChains.length,
+      perChainMs: perChainMs,
+      mode: 'per-chain GET balance',
+    );
+    for (final entry in chainResults) {
+      final chainCfg = entry.$1;
+      final partial = entry.$2;
+      if (partial == null) {
+        continue;
+      }
+      anyOk = true;
+      for (final cd in partial) {
+        final key =
+            '${chainCfg.backendStableSegment}_${cd.symbol.toUpperCase()}';
+        if (!seen.add(key)) {
+          continue;
+        }
+        coins.add(cd);
+      }
+    }
+    return (coins: coins, anyOk: anyOk);
+  }
+
+  /// 拉取单条链的余额并组装 [CoinData]；`null` 表示无主地址（全量刷新时跳过该链；单链刷新时保留旧数据）。
+  /// 接口失败或返回空列表时仍可能返回仅含占位行的非空列表，以便首页能展示该链主币。
   Future<List<CoinData>?> _loadCoinsForChainConfig(
     AppChainConfig chainCfg,
     Map<String, AppSymbolQuote> quotes,
   ) async {
-    final creds = _credentials;
-    if (creds == null) {
+    if (_credentials == null) {
       return null;
     }
     final chainParam = chainCfg.walletApiChainQuery;
     final kind = ChainRules.kindForAppChain(chainCfg);
-    final addressHex = creds.address.hex;
-    final tronAddr = _tronAddress;
-    final ownerAddress = switch (kind) {
-      ChainKind.tron => tronAddr ?? '',
-      ChainKind.solana => _solanaAddress ?? '',
-      ChainKind.xrp => _xrpAddress ?? '',
-      ChainKind.evm || ChainKind.unknown => addressHex,
-    };
+    final ownerAddress = _ownerAddressStringForChain(chainCfg) ?? '';
     if (ownerAddress.isEmpty) {
+      // TON 地址推导失败或未就绪时仍展示占位资产，避免首页完全看不到 TON；详情/收款处再提示地址未就绪。
+      if (kind == ChainKind.ton) {
+        return _nativePlaceholderCoinsForChain(chainCfg, quotes, null);
+      }
       return null;
     }
     if (kDebugMode) {
@@ -329,7 +896,9 @@ class WalletController extends ChangeNotifier {
       );
     }
     final List<WalletBalanceEntry>? remote;
-    if (kind == ChainKind.solana || kind == ChainKind.xrp) {
+    if (kind == ChainKind.solana ||
+        kind == ChainKind.xrp ||
+        kind == ChainKind.ton) {
       final symbols = <String>[];
       for (final e in chainCfg.cryptos) {
         final s = e.crypto.trim();
@@ -351,8 +920,7 @@ class WalletController extends ChangeNotifier {
           (crypto) => _walletBalanceService.fetchBalances(
             address: ownerAddress,
             chain: chainParam,
-            chainType: chainCfg.chainType,
-            crypto: crypto,
+            coin: crypto,
           ),
         ),
       );
@@ -372,91 +940,14 @@ class WalletController extends ChangeNotifier {
       remote = await _walletBalanceService.fetchBalances(
         address: ownerAddress,
         chain: chainParam,
-        chainType: chainCfg.chainType,
       );
-    }
-    if (remote == null) {
-      return null;
     }
     final chainIdInt =
         kind == ChainKind.evm ? int.tryParse(chainCfg.chainId) : null;
-    final coins = <CoinData>[];
-    final seen = <String>{};
-    if (remote.isNotEmpty) {
-      for (final row in remote) {
-        final sym = row.crypto?.trim() ?? '';
-        if (sym.isEmpty) {
-          continue;
-        }
-        final key = '${chainCfg.backendStableSegment}_${sym.toUpperCase()}';
-        if (!seen.add(key)) {
-          continue;
-        }
-        AppChainCrypto? meta;
-        for (final x in chainCfg.cryptos) {
-          if (x.crypto.toUpperCase() == sym.toUpperCase()) {
-            meta = x;
-            break;
-          }
-        }
-        final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-        final q = AppPriceService.resolveQuote(sym, quotes[pair]);
-        final price = q.price;
-        final change = q.change24h;
-        final bal = row.balance;
-        coins.add(
-          CoinData(
-            id: chainCfg.coinPrimaryId(sym),
-            symbol: sym.toUpperCase(),
-            name: meta?.cryptoName ?? sym.toUpperCase(),
-            icon: _cryptoListIcon(sym),
-            network: chainCfg.chainName,
-            chainId: chainIdInt,
-            walletApiChainQuery: chainParam,
-            txUrlPrefix: chainCfg.txUrlPrefix,
-            addressUrlPrefix: chainCfg.addressUrlPrefix,
-            price: price,
-            priceChange24h: change,
-            balance: bal,
-            balanceUSD: bal * price,
-          ),
-        );
-      }
-    } else {
-      for (final c in chainCfg.cryptos) {
-        if (c.isNative != 1) {
-          continue;
-        }
-        final sym = c.crypto.toUpperCase();
-        final key = '${chainCfg.backendStableSegment}_$sym';
-        if (!seen.add(key)) {
-          continue;
-        }
-        final pair = AppPriceService.usdtPairKeyForSymbol(sym);
-        final q = AppPriceService.resolveQuote(sym, quotes[pair]);
-        final price = q.price;
-        final change = q.change24h;
-        const bal = 0.0;
-        coins.add(
-          CoinData(
-            id: chainCfg.coinPrimaryId(sym),
-            symbol: sym,
-            name: c.cryptoName ?? sym,
-            icon: _cryptoListIcon(sym),
-            network: chainCfg.chainName,
-            chainId: chainIdInt,
-            walletApiChainQuery: chainParam,
-            txUrlPrefix: chainCfg.txUrlPrefix,
-            addressUrlPrefix: chainCfg.addressUrlPrefix,
-            price: price,
-            priceChange24h: change,
-            balance: bal,
-            balanceUSD: bal * price,
-          ),
-        );
-      }
+    if (remote != null && remote.isNotEmpty) {
+      return _coinDataFromBalanceEntries(chainCfg, remote, quotes);
     }
-    return coins;
+    return _nativePlaceholderCoinsForChain(chainCfg, quotes, chainIdInt);
   }
 
   /// 币种详情等处：只刷新 `_backendChains` 中某条 `walletApiChainQuery`，减少无关链请求。
@@ -482,13 +973,7 @@ class WalletController extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     try {
-      var quotes = await _appPriceService.fetchAllPrices();
-      if (quotes.isEmpty) {
-        final cachedQ = await _localCache?.getPriceQuotes();
-        if (cachedQ != null && cachedQ.isNotEmpty) {
-          quotes = cachedQ;
-        }
-      }
+      final quotes = await _fetchPriceQuotesForHomeRefresh();
       final replacement = await _loadCoinsForChainConfig(cfg, quotes);
       if (replacement == null) {
         return;
@@ -499,7 +984,7 @@ class WalletController extends ChangeNotifier {
             (c) => (c.walletApiChainQuery ?? '').trim().toUpperCase() != qUpper,
           )
           .toList();
-      _evmCoins = [...others, ...replacement];
+      _assignEvmCoins([...others, ...replacement]);
       _ensureSendChainDefault();
 
       final wid = _activeWalletId;
@@ -517,25 +1002,42 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  bool _canQueryBalances() {
+    for (final c in _activeBackendChains()) {
+      if (_ownerAddressStringForChain(c) != null) {
+        return true;
+      }
+    }
+    return _credentials != null;
+  }
+
   Future<void> init() async {
     _initReady = false;
     notifyListeners();
+    var startedEarlyBalanceRefresh = false;
     try {
       if (kDebugMode) {
         debugPrint('WalletController.init: start');
       }
-      _backendChains = await _chainsService.fetchChains();
-      if (_backendChains.isNotEmpty) {
-        unawaited(_localCache?.putChains(_backendChains));
-      } else {
-        final cached = await _localCache?.getChains();
-        if (cached != null && cached.isNotEmpty) {
-          _backendChains = cached;
-        }
+      HomeRefreshProfiler.begin('init');
+      HomeRefreshProfiler.mark('before chains (cache)');
+      final cachedChains = await _localCache?.getChains();
+      final hadChainsCache =
+          cachedChains != null && cachedChains.isNotEmpty;
+      if (hadChainsCache) {
+        _backendChains = cachedChains;
+        HomeRefreshProfiler.mark(
+          'chains from cache (${_backendChains.length})',
+        );
+        _ensureSendChainDefault();
       }
-      _ensureSendChainDefault();
-      if (kDebugMode && _backendChains.isNotEmpty) {
-        debugPrint('WalletController: backend chains ${_backendChains.length}');
+      final chainsNetworkFuture = _loadBackendChainsFromNetwork(
+        refreshBalancesIfChanged: hadChainsCache,
+      );
+      if (!hadChainsCache) {
+        await chainsNetworkFuture;
+      } else {
+        unawaited(chainsNetworkFuture);
       }
       if (kDebugMode) {
         debugPrint('WalletController.init: read pin');
@@ -560,8 +1062,11 @@ class WalletController extends ChangeNotifier {
       if (_activeWalletId != null) {
         _hiddenCoinIds =
             await _storage.readHiddenCoinIdsForWallet(_activeWalletId!);
+        _coinOrderIds =
+            await _storage.readCoinOrderForWallet(_activeWalletId!);
       } else {
         _hiddenCoinIds = <String>{};
+        _coinOrderIds = [];
       }
 
       // 冷启动优先用 Drift 快照先画首页资产列表，接口返回后再更新。
@@ -570,9 +1075,7 @@ class WalletController extends ChangeNotifier {
         try {
           final snap = await _localCache?.getEvmCoinsForWallet(wid);
           if (snap != null && snap.isNotEmpty) {
-            _evmCoins = snap
-                .where((c) => c.id.isEmpty || !_hiddenCoinIds.contains(c.id))
-                .toList();
+            _assignEvmCoins(snap);
             _ensureSendChainDefault();
             notifyListeners();
           }
@@ -589,17 +1092,25 @@ class WalletController extends ChangeNotifier {
       if (kDebugMode) {
         debugPrint('WalletController.init: load credentials');
       }
-      await _loadCredentialsFromActiveMnemonic();
+      HomeRefreshProfiler.mark('before load credentials');
+      startedEarlyBalanceRefresh =
+          await _loadCredentialsFromActiveMnemonic(
+        overlapBalanceRefresh: hadChainsCache,
+      );
+      HomeRefreshProfiler.mark('credentials loaded');
+      // 冷启动：只要已设 PIN 即保持锁定（见上方 _sessionUnlocked = false），每次重新打开 App 都要输 PIN。
+      // 30 分钟宽限仅用于进程仍存活时「切后台 → 回前台」，见 [onAppResumed]。
       if (_pinEnabled && _credentials != null) {
-        await _loadPinGraceForActiveWallet();
-        final now = DateTime.now().millisecondsSinceEpoch;
-        if (_isWithinPinGrace(now)) {
-          _sessionUnlocked = true;
+        _lastBackgroundedAtMs = null;
+        final wid = _activeWalletId;
+        if (wid != null) {
+          unawaited(_storage.clearPinBackgroundAtMs(wid));
         }
       }
     } catch (e, st) {
       debugPrint('WalletController.init failed: $e\n$st');
     } finally {
+      HomeRefreshProfiler.end('init');
       _initReady = true;
       notifyListeners();
       if (kDebugMode) {
@@ -607,7 +1118,9 @@ class WalletController extends ChangeNotifier {
       }
     }
     // 已启用 PIN 且未解锁时不要在后台拉余额：会多次 notifyListeners，主线程在解锁层下仍重建整个 MainTabs。
-    if (_credentials != null && (!_pinEnabled || _sessionUnlocked)) {
+    if (_canQueryBalances() &&
+        (!_pinEnabled || _sessionUnlocked) &&
+        !startedEarlyBalanceRefresh) {
       unawaited(refreshBalances());
     }
   }
@@ -634,47 +1147,149 @@ class WalletController extends ChangeNotifier {
   Future<void> _applyDerivedKeysFromMnemonic(String m) async {
     _credentials = HdWalletService.privateKeyFromMnemonic(m);
     _addressHex = _credentials!.address.hex;
-    final tronPk = Uint8List.fromList(
-      HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
-    );
-    _tronPrivateKey = tronPk;
-    _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
-    try {
-      _solanaAddress = await HdWalletService.solanaAddressFromMnemonic(m);
-    } catch (e, st) {
-      debugPrint('Solana derive failed: $e\n$st');
-      _solanaAddress = null;
-    }
-    try {
-      _xrpAddress = HdWalletService.xrpAddressFromMnemonic(m);
-    } catch (e, st) {
-      debugPrint('XRP derive failed: $e\n$st');
-      _xrpAddress = null;
-    }
+
+    await Future.wait([
+      Future<void>(() async {
+        try {
+          final tronPk = Uint8List.fromList(
+            HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
+          );
+          _tronPrivateKey = tronPk;
+          _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
+        } catch (e, st) {
+          debugPrint('Tron derive failed: $e\n$st');
+          _tronPrivateKey = null;
+          _tronAddress = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _solanaAddress = await HdWalletService.solanaAddressFromMnemonic(m);
+        } catch (e, st) {
+          debugPrint('Solana derive failed: $e\n$st');
+          _solanaAddress = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _xrpAddress = HdWalletService.xrpAddressFromMnemonic(m);
+        } catch (e, st) {
+          debugPrint('XRP derive failed: $e\n$st');
+          _xrpAddress = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _btcMainnetAddress = HdWalletService.btcP2wpkhAddressFromMnemonic(
+            m,
+            testnet: false,
+          );
+          _btcTestnetAddress = HdWalletService.btcP2wpkhAddressFromMnemonic(
+            m,
+            testnet: true,
+          );
+        } catch (e, st) {
+          debugPrint('BTC derive failed: $e\n$st');
+          _btcMainnetAddress = null;
+          _btcTestnetAddress = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _dogeMainnetAddress = HdWalletService.dogeP2pkhAddressFromMnemonic(
+            m,
+            testnet: false,
+          );
+          _dogeTestnetAddress = HdWalletService.dogeP2pkhAddressFromMnemonic(
+            m,
+            testnet: true,
+          );
+        } catch (e, st) {
+          debugPrint('DOGE derive failed: $e\n$st');
+          _dogeMainnetAddress = null;
+          _dogeTestnetAddress = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _tonAddressMain = await HdWalletService.tonFriendlyAddressFromMnemonic(
+            m,
+            testOnly: false,
+          );
+        } catch (e, st) {
+          debugPrint('TON main derive failed: $e\n$st');
+          _tonAddressMain = null;
+        }
+      }),
+      Future<void>(() async {
+        try {
+          _tonAddressTest = await HdWalletService.tonFriendlyAddressFromMnemonic(
+            m,
+            testOnly: true,
+          );
+        } catch (e, st) {
+          debugPrint('TON test derive failed: $e\n$st');
+          _tonAddressTest = null;
+        }
+      }),
+    ]);
   }
 
-  Future<void> _loadCredentialsFromActiveMnemonic() async {
+  /// 返回是否在派生完成前已用地址缓存发起余额刷新。
+  Future<bool> _loadCredentialsFromActiveMnemonic({
+    bool overlapBalanceRefresh = false,
+  }) async {
     _credentials = null;
     _addressHex = null;
     _tronPrivateKey = null;
     _tronAddress = null;
     _solanaAddress = null;
     _xrpAddress = null;
+    _tonAddressMain = null;
+    _tonAddressTest = null;
+    _btcMainnetAddress = null;
+    _btcTestnetAddress = null;
+    _dogeMainnetAddress = null;
+    _dogeTestnetAddress = null;
     _backedUp = false;
     final id = _activeWalletId;
     if (id == null) {
-      return;
+      return false;
     }
     final m = await _storage.readMnemonicForWallet(id);
     if (m == null || m.isEmpty) {
-      return;
+      return false;
     }
+
+    final addrSnap = await _localCache?.getDerivedAddresses(id);
+    final hadAddrSnap = addrSnap != null;
+    if (hadAddrSnap) {
+      _applyDerivedAddressSnapshot(addrSnap);
+    }
+
+    var startedEarlyRefresh = false;
+    if (overlapBalanceRefresh &&
+        hadAddrSnap &&
+        (!_pinEnabled || _sessionUnlocked) &&
+        _canQueryBalances()) {
+      if (kDebugMode) {
+        debugPrint(
+          'WalletController: overlap refreshBalances during key derive',
+        );
+      }
+      unawaited(refreshBalances());
+      startedEarlyRefresh = true;
+    }
+
     try {
       await _applyDerivedKeysFromMnemonic(m);
       final idx = _wallets.indexWhere((w) => w.id == id);
       _backedUp = idx >= 0
           ? _wallets[idx].backedUp
           : await _storage.readBackedUpForWallet(id);
+      unawaited(
+        _localCache?.putDerivedAddresses(id, _derivedAddressSnapshotFromState()),
+      );
     } catch (e, st) {
       debugPrint('Wallet init failed: $e\n$st');
       _credentials = null;
@@ -683,7 +1298,15 @@ class WalletController extends ChangeNotifier {
       _tronAddress = null;
       _solanaAddress = null;
       _xrpAddress = null;
+      _tonAddressMain = null;
+      _tonAddressTest = null;
+      _btcMainnetAddress = null;
+      _btcTestnetAddress = null;
+      _dogeMainnetAddress = null;
+      _dogeTestnetAddress = null;
+      return false;
     }
+    return startedEarlyRefresh;
   }
 
   /// 创建新钱包；若已设置 PIN 则校验 [pin]，否则写入 PIN。
@@ -731,13 +1354,15 @@ class WalletController extends ChangeNotifier {
       _tronAddress = null;
       _solanaAddress = null;
       _xrpAddress = null;
+      _tonAddressMain = null;
+      _tonAddressTest = null;
+      _btcMainnetAddress = null;
+      _btcTestnetAddress = null;
     }
     _backedUp = false;
     _sessionUnlocked = true;
     if (_pinEnabled) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      _lastSessionUnlockAtMs = now;
-      unawaited(_storage.writePinSessionUnlockAtMs(id, now));
+      unawaited(_clearBackgroundAtForActiveWallet());
     }
     await refreshBalances();
     notifyListeners();
@@ -816,13 +1441,15 @@ class WalletController extends ChangeNotifier {
       _tronAddress = null;
       _solanaAddress = null;
       _xrpAddress = null;
+      _tonAddressMain = null;
+      _tonAddressTest = null;
+      _btcMainnetAddress = null;
+      _btcTestnetAddress = null;
     }
     _backedUp = false;
     _sessionUnlocked = true;
     if (_pinEnabled) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      _lastSessionUnlockAtMs = now;
-      unawaited(_storage.writePinSessionUnlockAtMs(id, now));
+      unawaited(_clearBackgroundAtForActiveWallet());
     }
     await refreshBalances();
     notifyListeners();
@@ -835,14 +1462,12 @@ class WalletController extends ChangeNotifier {
     await _storage.setActiveWalletId(id);
     _activeWalletId = id;
     _hiddenCoinIds = await _storage.readHiddenCoinIdsForWallet(id);
-    if (_pinEnabled) {
-      _sessionUnlocked = false;
-    }
+    _coinOrderIds = await _storage.readCoinOrderForWallet(id);
     await _loadCredentialsFromActiveMnemonic();
-    await _loadPinGraceForActiveWallet();
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (_pinEnabled && _credentials != null && _isWithinPinGrace(now)) {
-      _sessionUnlocked = true;
+    _lastBackgroundedAtMs = null;
+    // 切换钱包不重新要求 PIN；清掉目标钱包旧的「进后台」记录，避免误用历史时间戳。
+    if (_pinEnabled) {
+      unawaited(_clearBackgroundAtForActiveWallet());
     }
     notifyListeners();
     if (_credentials != null && (!_pinEnabled || _sessionUnlocked)) {
@@ -862,6 +1487,46 @@ class WalletController extends ChangeNotifier {
     _hiddenCoinIds = next;
     notifyListeners();
     await _storage.writeHiddenCoinIdsForWallet(id, _hiddenCoinIds);
+  }
+
+  Future<void> updateCoinOrder(List<String> orderedIds) async {
+    final id = _activeWalletId;
+    if (id == null) {
+      return;
+    }
+    _coinOrderIds = List<String>.from(orderedIds);
+    _reconcileCoinOrderWithCoins(_evmCoins);
+    notifyListeners();
+    await _storage.writeCoinOrderForWallet(id, _coinOrderIds);
+  }
+
+  Future<void> moveCoinToTop(String coinId) async {
+    if (coinId.isEmpty) {
+      return;
+    }
+    final next = List<String>.from(_coinOrderIds);
+    next.remove(coinId);
+    next.insert(0, coinId);
+    await updateCoinOrder(next);
+  }
+
+  Future<void> reorderManagedCoins(int oldIndex, int newIndex) async {
+    final items = List<CoinData>.from(allEvmCoins);
+    if (oldIndex < 0 ||
+        oldIndex >= items.length ||
+        newIndex < 0 ||
+        newIndex > items.length) {
+      return;
+    }
+    var target = newIndex;
+    if (target > oldIndex) {
+      target -= 1;
+    }
+    final item = items.removeAt(oldIndex);
+    items.insert(target, item);
+    await updateCoinOrder(
+      items.map((c) => c.id).where((id) => id.isNotEmpty).toList(),
+    );
   }
 
   Future<void> renameActiveWallet(String name) async {
@@ -908,8 +1573,12 @@ class WalletController extends ChangeNotifier {
         _tronAddress = null;
         _solanaAddress = null;
         _xrpAddress = null;
+        _tonAddressMain = null;
+        _tonAddressTest = null;
+        _btcMainnetAddress = null;
+        _btcTestnetAddress = null;
         _backedUp = false;
-        _evmCoins = [];
+        _assignEvmCoins([]);
       } else {
         _activeWalletId = next.first.id;
         await _storage.setActiveWalletId(_activeWalletId!);
@@ -989,6 +1658,60 @@ class WalletController extends ChangeNotifier {
     }
   }
 
+  /// 根据助记词推导该钱包的 TON 友好地址（主网 / 测试网由 [testOnly] 决定），不切换当前钱包。
+  Future<String?> readTonAddressForWallet(
+    String walletId, {
+    required bool testOnly,
+  }) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return await HdWalletService.tonFriendlyAddressFromMnemonic(
+        m,
+        testOnly: testOnly,
+      );
+    } catch (e, st) {
+      debugPrint('readTonAddressForWallet: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 根据助记词推导该钱包的 BTC Native SegWit（BIP84）地址，不切换当前钱包。
+  Future<String?> readBtcAddressForWallet(
+    String walletId, {
+    required bool testnet,
+  }) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return HdWalletService.btcP2wpkhAddressFromMnemonic(m, testnet: testnet);
+    } catch (e, st) {
+      debugPrint('readBtcAddressForWallet: $e\n$st');
+      return null;
+    }
+  }
+
+  /// 根据助记词推导该钱包的 Dogecoin P2PKH（BIP44 coin type 3）地址。
+  Future<String?> readDogeAddressForWallet(
+    String walletId, {
+    required bool testnet,
+  }) async {
+    final m = await _storage.readMnemonicForWallet(walletId);
+    if (m == null || m.isEmpty) {
+      return null;
+    }
+    try {
+      return HdWalletService.dogeP2pkhAddressFromMnemonic(m, testnet: testnet);
+    } catch (e, st) {
+      debugPrint('readDogeAddressForWallet: $e\n$st');
+      return null;
+    }
+  }
+
   Future<PinVerifyResult> verifyTransactionPin(String pin) =>
       _storage.verifyPin(pin);
 
@@ -996,12 +1719,7 @@ class WalletController extends ChangeNotifier {
     final r = await _storage.verifyPin(pin);
     if (r.ok) {
       _sessionUnlocked = true;
-      final wid = _activeWalletId;
-      if (wid != null) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        _lastSessionUnlockAtMs = now;
-        unawaited(_storage.writePinSessionUnlockAtMs(wid, now));
-      }
+      unawaited(_clearBackgroundAtForActiveWallet());
       notifyListeners();
       if (_credentials != null) {
         unawaited(refreshBalances());
@@ -1031,39 +1749,87 @@ class WalletController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 广播成功后调用：失效对应交易历史缓存并通知 UI 重拉列表。
+  Future<void> notifyTransferCompleted({
+    required String chainParam,
+    required String coinSymbol,
+  }) async {
+    _txHistoryRefreshTick++;
+    final cache = _localCache;
+    final q = chainParam.trim();
+    if (cache != null && q.isNotEmpty) {
+      AppChainConfig? cfg;
+      for (final c in _activeBackendChains()) {
+        if (c.walletApiChainQuery == q) {
+          cfg = c;
+          break;
+        }
+      }
+      if (cfg != null) {
+        final owner = ownerAddressForChainConfig(cfg);
+        if (owner != null && owner.trim().isNotEmpty) {
+          final kind = ChainRules.kindForAppChain(cfg);
+          final addr = ChainRules.formatAddressForUi(kind, owner);
+          final scope = cache.transactionScopeKey(addr, q, coinSymbol);
+          try {
+            await cache.clearTransactionHistory(scope);
+          } catch (e) {
+            debugPrint('clearTransactionHistory: $e');
+          }
+        }
+      }
+    }
+    notifyListeners();
+  }
+
   Future<void> refreshBalances() async {
-    if (_credentials == null) {
+    if (!_canQueryBalances()) {
       return;
     }
     _loading = true;
     notifyListeners();
+    HomeRefreshProfiler.begin('refreshBalances');
     try {
-      var quotes = await _appPriceService.fetchAllPrices();
-      if (quotes.isEmpty) {
-        final cachedQ = await _localCache?.getPriceQuotes();
-        if (cachedQ != null && cachedQ.isNotEmpty) {
-          quotes = cachedQ;
-        }
-      }
       final backendChains = _activeBackendChains().toList();
+      HomeRefreshProfiler.mark('parallel: price + balances/batch');
+
+      late final Map<String, AppSymbolQuote> quotes;
+      late ({List<CoinData> coins, bool anyOk}) outcome;
       var anyBalanceRequestOk = backendChains.isEmpty;
+
+      if (backendChains.isEmpty) {
+        quotes = await _fetchPriceQuotesForHomeRefresh();
+        outcome = (coins: <CoinData>[], anyOk: false);
+      } else {
+        final parallel = await Future.wait<Object?>([
+          _fetchPriceQuotesForHomeRefresh(),
+          _fetchBalancesBatchResults(backendChains),
+        ]);
+        quotes = parallel[0]! as Map<String, AppSymbolQuote>;
+        final batchResults =
+            parallel[1] as List<BatchWalletBalanceResult>?;
+        outcome = await _mergeBatchBalanceResults(
+          backendChains,
+          batchResults,
+          quotes,
+        );
+      }
+
       final coins = <CoinData>[];
       if (backendChains.isNotEmpty) {
-        final seen = <String>{};
-        for (final chainCfg in backendChains) {
-          final partial = await _loadCoinsForChainConfig(chainCfg, quotes);
-          if (partial == null) {
-            continue;
+        if (!outcome.anyOk) {
+          if (kDebugMode) {
+            debugPrint(
+              '[HomeRefresh] balances/batch unavailable, fallback per-chain',
+            );
           }
-          anyBalanceRequestOk = true;
-          for (final cd in partial) {
-            final key =
-                '${chainCfg.backendStableSegment}_${cd.symbol.toUpperCase()}';
-            if (!seen.add(key)) {
-              continue;
-            }
-            coins.add(cd);
-          }
+          outcome =
+              await _refreshCoinsViaPerChainBalance(backendChains, quotes);
+        }
+        coins.addAll(outcome.coins);
+        anyBalanceRequestOk = outcome.anyOk;
+        if (kDebugMode) {
+          HomeRefreshProfiler.mark('balance list merged (${coins.length} coins)');
         }
       }
       // 无网时各链常返回 null（非抛错），下面会造出全 0 列表；用 Drift 上次快照，避免全 0 占屏、勿把好缓存写坏
@@ -1072,7 +1838,7 @@ class WalletController extends ChangeNotifier {
         if (wid != null) {
           final snap = await _localCache?.getEvmCoinsForWallet(wid);
           if (snap != null && snap.isNotEmpty) {
-            _evmCoins = snap;
+            _assignEvmCoins(snap);
             _ensureSendChainDefault();
             if (quotes.isNotEmpty) {
               unawaited(_localCache?.putPriceQuotes(quotes));
@@ -1081,7 +1847,7 @@ class WalletController extends ChangeNotifier {
           }
         }
       }
-      _evmCoins = coins;
+      _assignEvmCoins(coins);
       _ensureSendChainDefault();
       final wid = _activeWalletId;
       if (wid != null) {
@@ -1098,10 +1864,11 @@ class WalletController extends ChangeNotifier {
       if (wid != null) {
         final snap = await _localCache?.getEvmCoinsForWallet(wid);
         if (snap != null && snap.isNotEmpty) {
-          _evmCoins = snap;
+          _assignEvmCoins(snap);
         }
       }
     } finally {
+      HomeRefreshProfiler.end('refreshBalances');
       _loading = false;
       notifyListeners();
     }
@@ -1109,6 +1876,7 @@ class WalletController extends ChangeNotifier {
 
   /// 首页下拉刷新：重读钱包列表与当前选中钱包，并刷新链上余额与行情。
   Future<void> refreshWalletHome() async {
+    HomeRefreshProfiler.begin('pullToRefresh');
     try {
       _wallets = await _storage.readWalletList();
       await _reconcileBackedUpFromLegacyKeys();
@@ -1122,16 +1890,20 @@ class WalletController extends ChangeNotifier {
         _activeWalletId = _wallets.first.id;
         await _storage.setActiveWalletId(_activeWalletId!);
       }
+      HomeRefreshProfiler.mark('before load credentials');
       await _loadCredentialsFromActiveMnemonic();
+      HomeRefreshProfiler.mark('credentials loaded');
       if (_credentials != null) {
         await refreshBalances();
       } else {
-        _evmCoins = [];
+        _assignEvmCoins([]);
         notifyListeners();
       }
     } catch (e, st) {
       debugPrint('refreshWalletHome: $e\n$st');
       notifyListeners();
+    } finally {
+      HomeRefreshProfiler.end('pullToRefresh');
     }
   }
 
@@ -1208,6 +1980,75 @@ class WalletController extends ChangeNotifier {
     return null;
   }
 
+  Future<String> _signBroadcastUtxoTransfer({
+    required AppChainConfig cfg,
+    required String chain,
+    required String coin,
+    required String toAddress,
+    required num amount,
+    required bool testnet,
+    required String? ownerMainnet,
+    required String? ownerTestnet,
+    required String derivationPathMainnet,
+    required String derivationPathTestnet,
+    required String notReadyLabel,
+    required bool doge,
+  }) async {
+    final wid = _activeWalletId;
+    if (wid == null) {
+      throw StateError('未选择钱包');
+    }
+    final phrase = await _storage.readMnemonicForWallet(wid);
+    if (phrase == null || phrase.trim().isEmpty) {
+      throw StateError('无法读取助记词');
+    }
+    final owner = testnet ? (ownerTestnet ?? '') : (ownerMainnet ?? '');
+    if (owner.isEmpty) {
+      throw StateError('$notReadyLabel 地址未就绪');
+    }
+    final create = await _transferApi.createTransaction(
+      chain: chain,
+      coin: coin,
+      ownerAddress: owner,
+      toAddress: toAddress,
+      amount: amount,
+      gasPriceType: null,
+      chainType: cfg.chainType,
+    );
+    if (create == null) {
+      throw StateError('createTransaction 无响应');
+    }
+    if (create['code'] != 0) {
+      final msg = create['message']?.toString() ?? 'createTransaction 失败';
+      throw StateError(msg);
+    }
+    final data = _asMap(create['data']);
+    final path =
+        testnet ? derivationPathTestnet : derivationPathMainnet;
+    final pk = HdWalletService.btcEcprivateFromMnemonicPath(phrase, path);
+    final signedHex = BtcBackendTransfer.signCreateTransactionData(
+      data: data,
+      ownerPrivateKey: pk,
+      expectedOwnerAddress: owner,
+      testnet: testnet,
+      doge: doge,
+    );
+    final broad = await _transferApi.broadcastTransaction(
+      chain: chain,
+      coin: coin,
+      data: signedHex,
+    );
+    if (broad == null) {
+      throw StateError('broadcastTransaction 无响应');
+    }
+    if (broad['code'] != 0) {
+      final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+      throw StateError(msg);
+    }
+    final h = _readTxHashFromBroadcast(broad['data']);
+    return h ?? signedHex;
+  }
+
   /// 走后端 `createTransaction` + 本地 legacy 签名 + `broadcastTransaction` 广播；返回 `txHash`（若响应未提供则回退 raw）。
   Future<String> createSignBroadcastBackendTransfer({
     required String chain,
@@ -1274,7 +2115,6 @@ class WalletController extends ChangeNotifier {
         chain: chain,
         coin: coin,
         data: signedB64,
-        chainType: cfg.chainType,
       );
       if (broad == null) {
         throw StateError('broadcastTransaction 无响应');
@@ -1331,7 +2171,6 @@ class WalletController extends ChangeNotifier {
         chain: chain,
         coin: coin,
         data: signedB64,
-        chainType: cfg.chainType,
       );
       if (broad == null) {
         throw StateError('broadcastTransaction 无响应');
@@ -1342,6 +2181,96 @@ class WalletController extends ChangeNotifier {
       }
       final h = _readTxHashFromBroadcast(broad['data']);
       return h ?? signedB64;
+    }
+
+    if (kind == ChainKind.ton) {
+      final wid = _activeWalletId;
+      if (wid == null) {
+        throw StateError('未选择钱包');
+      }
+      final phrase = await _storage.readMnemonicForWallet(wid);
+      if (phrase == null || phrase.trim().isEmpty) {
+        throw StateError('无法读取助记词');
+      }
+      final testOnly = HdWalletService.tonTestOnlyHeuristic(cfg);
+      final owner =
+          testOnly ? (_tonAddressTest ?? '') : (_tonAddressMain ?? '');
+      if (owner.isEmpty) {
+        throw StateError('TON 地址未就绪');
+      }
+      final create = await _transferApi.createTransaction(
+        chain: chain,
+        coin: coin,
+        ownerAddress: owner,
+        toAddress: toAddress,
+        amount: amount,
+        gasPriceType: null,
+        chainType: cfg.chainType,
+      );
+      if (create == null) {
+        throw StateError('createTransaction 无响应');
+      }
+      if (create['code'] != 0) {
+        final msg = create['message']?.toString() ?? 'createTransaction 失败';
+        throw StateError(msg);
+      }
+      final data = _asMap(create['data']);
+      final pk = await TonBackendTransfer.privateKeyFromMnemonic(phrase);
+      final broadcastPayload = await TonBackendTransfer.prepareBroadcastData(
+        data: data,
+        privateKey: pk,
+        expectedOwnerFriendly: owner,
+        testOnly: testOnly,
+        fallbackAmountTon: amount,
+      );
+      final broad = await _transferApi.broadcastTransaction(
+        chain: chain,
+        coin: coin,
+        data: broadcastPayload,
+      );
+      if (broad == null) {
+        throw StateError('broadcastTransaction 无响应');
+      }
+      if (broad['code'] != 0) {
+        final msg = broad['message']?.toString() ?? 'broadcastTransaction 失败';
+        throw StateError(msg);
+      }
+      final h = _readTxHashFromBroadcast(broad['data']);
+      return h ?? broadcastPayload;
+    }
+
+    if (kind == ChainKind.btc) {
+      return _signBroadcastUtxoTransfer(
+        cfg: cfg,
+        chain: chain,
+        coin: coin,
+        toAddress: toAddress,
+        amount: amount,
+        testnet: HdWalletService.btcTestnetHeuristic(cfg),
+        ownerMainnet: _btcMainnetAddress,
+        ownerTestnet: _btcTestnetAddress,
+        derivationPathMainnet: kBtcMainnetBip84Path,
+        derivationPathTestnet: kBtcTestnetBip84Path,
+        notReadyLabel: 'BTC',
+        doge: false,
+      );
+    }
+
+    if (kind == ChainKind.doge) {
+      return _signBroadcastUtxoTransfer(
+        cfg: cfg,
+        chain: chain,
+        coin: coin,
+        toAddress: toAddress,
+        amount: amount,
+        testnet: HdWalletService.dogeTestnetHeuristic(cfg),
+        ownerMainnet: _dogeMainnetAddress,
+        ownerTestnet: _dogeTestnetAddress,
+        derivationPathMainnet: kDogeDefaultDerivationPath,
+        derivationPathTestnet: kDogeDefaultDerivationPath,
+        notReadyLabel: 'DOGE',
+        doge: true,
+      );
     }
 
     if (kind == ChainKind.tron) {
@@ -1404,7 +2333,6 @@ class WalletController extends ChangeNotifier {
         chain: chain,
         coin: coin,
         data: jsonEncode(txMap),
-        chainType: cfg.chainType,
       );
       if (kDebugMode) {
         debugPrint('TRON broadcastTransaction resp: $broad');
@@ -1461,7 +2389,6 @@ class WalletController extends ChangeNotifier {
       chain: chain,
       coin: coin,
       data: signed,
-      chainType: cfg.chainType,
     );
     if (broad == null) {
       throw StateError('broadcastTransaction 无响应');
