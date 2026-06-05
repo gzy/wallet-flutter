@@ -97,7 +97,7 @@ class WalletApp extends StatelessWidget {
               return child;
             }
             final needUnlock = w.initReady &&
-                w.hasWallet &&
+                w.hasStoredWallet &&
                 w.pinEnabled &&
                 !w.sessionUnlocked &&
                 !_previewWelcome;
@@ -166,7 +166,16 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
           return const Scaffold(
             backgroundColor: AppColors.background,
             body: Center(
-              child: CircularProgressIndicator(color: AppColors.accent),
+              child: RepaintBoundary(
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    color: AppColors.accent,
+                    strokeWidth: 2.5,
+                  ),
+                ),
+              ),
             ),
           );
         }
@@ -174,7 +183,7 @@ class _HomeShellState extends State<_HomeShell> with WidgetsBindingObserver {
           return const WelcomeScreen();
         }
         // 每次冷启动先展示欢迎页 2s；无钱包则一直停留，并展示底部按钮。
-        if (!w.hasWallet) {
+        if (!w.hasStoredWallet) {
           _startupWelcomeTimer?.cancel();
           _forceShowWelcome = true;
           return const WelcomeScreen(allowActions: true);

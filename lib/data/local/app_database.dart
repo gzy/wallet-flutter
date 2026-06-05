@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
 
 import 'connection.dart';
 
@@ -27,6 +28,9 @@ class CachedTxs extends Table {
 @DriftDatabase(tables: [CacheEntries, CachedTxs])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(openLocalDrift());
+
+  AppDatabase.forTesting([QueryExecutor? executor])
+      : super(executor ?? NativeDatabase.memory());
 
   @override
   int get schemaVersion => 1;

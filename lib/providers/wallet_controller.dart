@@ -5,9 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'package:web3dart/web3dart.dart';
 import 'package:web3dart/crypto.dart'
-    show bytesToHex, hexToBytes, hexToInt, sign;
-import 'package:crypto/crypto.dart' show sha256;
-
+    show bytesToHex, hexToBytes, hexToInt;
 import '../data/local/app_local_cache.dart';
 import '../models/app_chain_config.dart';
 import '../models/coin_data.dart';
@@ -27,7 +25,18 @@ import '../services/wallet/ton_backend_transfer.dart';
 import '../services/wallet/xrp_backend_transfer.dart';
 import '../services/wallet/wallet_transfer_api_service.dart';
 import '../services/wallet/wallet_transaction_service.dart';
+import '../services/wallet/wallet_estimate_gas_service.dart';
+import '../services/wallet/wallet_gas_price_service.dart';
 import '../services/wallet/tron_utils.dart';
+import '../services/wallet/tron_transaction_signer.dart';
+import '../services/wallet/tron_resource_service.dart';
+import '../models/tron_resource_preorder_dto.dart';
+import '../models/tron_resource_confirm_vo.dart';
+import '../services/wallet/wallet_key_derivation.dart';
+
+/// 为 `true` 时 DOGE 签名后不调用 `broadcastTransaction`，仅打印请求体供后端验签。
+/// 联调完成后改回 `false`。
+const bool kDogeSkipBroadcastForBackendTest = false;
 
 /// 全局钱包状态：多钱包、PIN、助记词派生、EVM 余额、发送交易
 class WalletController extends ChangeNotifier {
@@ -37,12 +46,14 @@ class WalletController extends ChangeNotifier {
     ChainsService? chainsService,
     WalletBalanceService? walletBalanceService,
     WalletTransferApiService? transferApi,
+    TronResourceService? tronResourceService,
     AppLocalCache? localCache,
   })  : _storage = storage ?? SecureStorageService(),
         _appPriceService = appPriceService ?? AppPriceService(),
         _chainsService = chainsService ?? ChainsService(),
         _walletBalanceService = walletBalanceService ?? WalletBalanceService(),
         _transferApi = transferApi ?? WalletTransferApiService(),
+        _tronResourceService = tronResourceService ?? TronResourceService(),
         _localCache = localCache;
 
   final SecureStorageService _storage;
@@ -50,6 +61,7 @@ class WalletController extends ChangeNotifier {
   final ChainsService _chainsService;
   final WalletBalanceService _walletBalanceService;
   final WalletTransferApiService _transferApi;
+  final TronResourceService _tronResourceService;
   final AppLocalCache? _localCache;
 
   /// 非敏感只读缓存（Drift），供地址簿/币种详情等使用。
@@ -99,6 +111,9 @@ class WalletController extends ChangeNotifier {
   List<AppChainConfig> get backendChains => List.unmodifiable(_backendChains);
 
   bool get hasWallet => _credentials != null;
+
+  /// 本地是否已有钱包记录（用于启动路由；派生完成前 [hasWallet] 可能仍为 false）。
+  bool get hasStoredWallet => _wallets.isNotEmpty;
   String? get addressHex => _addressHex;
   String? get tronAddress => _tronAddress;
   String? get solanaAddress => _solanaAddress;
@@ -1014,7 +1029,10 @@ class WalletController extends ChangeNotifier {
   Future<void> init() async {
     _initReady = false;
     notifyListeners();
-    var startedEarlyBalanceRefresh = false;
+    // 让首帧 loading 先绘制，再执行后续 I/O。
+    await Future<void>.delayed(Duration.zero);
+
+    var hadChainsCache = false;
     try {
       if (kDebugMode) {
         debugPrint('WalletController.init: start');
@@ -1022,8 +1040,7 @@ class WalletController extends ChangeNotifier {
       HomeRefreshProfiler.begin('init');
       HomeRefreshProfiler.mark('before chains (cache)');
       final cachedChains = await _localCache?.getChains();
-      final hadChainsCache =
-          cachedChains != null && cachedChains.isNotEmpty;
+      hadChainsCache = cachedChains != null && cachedChains.isNotEmpty;
       if (hadChainsCache) {
         _backendChains = cachedChains;
         HomeRefreshProfiler.mark(
@@ -1031,14 +1048,11 @@ class WalletController extends ChangeNotifier {
         );
         _ensureSendChainDefault();
       }
-      final chainsNetworkFuture = _loadBackendChainsFromNetwork(
-        refreshBalancesIfChanged: hadChainsCache,
+      unawaited(
+        _loadBackendChainsFromNetwork(
+          refreshBalancesIfChanged: hadChainsCache,
+        ),
       );
-      if (!hadChainsCache) {
-        await chainsNetworkFuture;
-      } else {
-        unawaited(chainsNetworkFuture);
-      }
       if (kDebugMode) {
         debugPrint('WalletController.init: read pin');
       }
@@ -1077,7 +1091,6 @@ class WalletController extends ChangeNotifier {
           if (snap != null && snap.isNotEmpty) {
             _assignEvmCoins(snap);
             _ensureSendChainDefault();
-            notifyListeners();
           }
         } catch (_) {
           // 缓存读失败不影响正常启动流程
@@ -1089,24 +1102,6 @@ class WalletController extends ChangeNotifier {
       } else {
         _sessionUnlocked = true;
       }
-      if (kDebugMode) {
-        debugPrint('WalletController.init: load credentials');
-      }
-      HomeRefreshProfiler.mark('before load credentials');
-      startedEarlyBalanceRefresh =
-          await _loadCredentialsFromActiveMnemonic(
-        overlapBalanceRefresh: hadChainsCache,
-      );
-      HomeRefreshProfiler.mark('credentials loaded');
-      // 冷启动：只要已设 PIN 即保持锁定（见上方 _sessionUnlocked = false），每次重新打开 App 都要输 PIN。
-      // 30 分钟宽限仅用于进程仍存活时「切后台 → 回前台」，见 [onAppResumed]。
-      if (_pinEnabled && _credentials != null) {
-        _lastBackgroundedAtMs = null;
-        final wid = _activeWalletId;
-        if (wid != null) {
-          unawaited(_storage.clearPinBackgroundAtMs(wid));
-        }
-      }
     } catch (e, st) {
       debugPrint('WalletController.init failed: $e\n$st');
     } finally {
@@ -1114,8 +1109,35 @@ class WalletController extends ChangeNotifier {
       _initReady = true;
       notifyListeners();
       if (kDebugMode) {
-        debugPrint('WalletController.init: done');
+        debugPrint('WalletController.init: shell ready');
       }
+    }
+
+    var startedEarlyBalanceRefresh = false;
+    try {
+      if (_activeWalletId != null) {
+        if (kDebugMode) {
+          debugPrint('WalletController.init: load credentials (background)');
+        }
+        HomeRefreshProfiler.mark('before load credentials');
+        startedEarlyBalanceRefresh =
+            await _loadCredentialsFromActiveMnemonic(
+          overlapBalanceRefresh: hadChainsCache,
+        );
+        HomeRefreshProfiler.mark('credentials loaded');
+        if (_pinEnabled && _credentials != null) {
+          _lastBackgroundedAtMs = null;
+          final wid = _activeWalletId;
+          if (wid != null) {
+            unawaited(_storage.clearPinBackgroundAtMs(wid));
+          }
+        }
+      }
+    } catch (e, st) {
+      debugPrint('WalletController.init credentials failed: $e\n$st');
+    }
+    if (kDebugMode) {
+      debugPrint('WalletController.init: done');
     }
     // 已启用 PIN 且未解锁时不要在后台拉余额：会多次 notifyListeners，主线程在解锁层下仍重建整个 MainTabs。
     if (_canQueryBalances() &&
@@ -1128,14 +1150,19 @@ class WalletController extends ChangeNotifier {
   /// 历史版本 [markBackedUp] 只写了 `wallet_backed_up__` 未写钱包列表 JSON，重启后列表里仍为未备份。
   /// 启动时若独立 key 为已备份则合并进列表并持久化。
   Future<void> _reconcileBackedUpFromLegacyKeys() async {
+    final next = await Future.wait(
+      _wallets.map((w) async {
+        if (!w.backedUp && await _storage.readBackedUpForWallet(w.id)) {
+          return w.copyWith(backedUp: true);
+        }
+        return w;
+      }),
+    );
     var dirty = false;
-    final next = <StoredWallet>[];
-    for (final w in _wallets) {
-      if (!w.backedUp && await _storage.readBackedUpForWallet(w.id)) {
-        next.add(w.copyWith(backedUp: true));
+    for (var i = 0; i < _wallets.length; i++) {
+      if (_wallets[i].backedUp != next[i].backedUp) {
         dirty = true;
-      } else {
-        next.add(w);
+        break;
       }
     }
     if (dirty) {
@@ -1144,95 +1171,24 @@ class WalletController extends ChangeNotifier {
     }
   }
 
-  Future<void> _applyDerivedKeysFromMnemonic(String m) async {
-    _credentials = HdWalletService.privateKeyFromMnemonic(m);
-    _addressHex = _credentials!.address.hex;
+  void _applyDerivedKeysResult(WalletDerivedKeysResult result) {
+    _credentials = EthPrivateKey(result.evmPrivateKey);
+    _addressHex = result.addressHex;
+    _tronPrivateKey = result.tronPrivateKey;
+    _tronAddress = result.tronAddress;
+    _solanaAddress = result.solanaAddress;
+    _xrpAddress = result.xrpAddress;
+    _tonAddressMain = result.tonAddressMain;
+    _tonAddressTest = result.tonAddressTest;
+    _btcMainnetAddress = result.btcMainnetAddress;
+    _btcTestnetAddress = result.btcTestnetAddress;
+    _dogeMainnetAddress = result.dogeMainnetAddress;
+    _dogeTestnetAddress = result.dogeTestnetAddress;
+  }
 
-    await Future.wait([
-      Future<void>(() async {
-        try {
-          final tronPk = Uint8List.fromList(
-            HdWalletService.tronPrivateKeyBytesFromMnemonic(m),
-          );
-          _tronPrivateKey = tronPk;
-          _tronAddress = tronAddressFromPrivateKeyBytes(tronPk);
-        } catch (e, st) {
-          debugPrint('Tron derive failed: $e\n$st');
-          _tronPrivateKey = null;
-          _tronAddress = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _solanaAddress = await HdWalletService.solanaAddressFromMnemonic(m);
-        } catch (e, st) {
-          debugPrint('Solana derive failed: $e\n$st');
-          _solanaAddress = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _xrpAddress = HdWalletService.xrpAddressFromMnemonic(m);
-        } catch (e, st) {
-          debugPrint('XRP derive failed: $e\n$st');
-          _xrpAddress = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _btcMainnetAddress = HdWalletService.btcP2wpkhAddressFromMnemonic(
-            m,
-            testnet: false,
-          );
-          _btcTestnetAddress = HdWalletService.btcP2wpkhAddressFromMnemonic(
-            m,
-            testnet: true,
-          );
-        } catch (e, st) {
-          debugPrint('BTC derive failed: $e\n$st');
-          _btcMainnetAddress = null;
-          _btcTestnetAddress = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _dogeMainnetAddress = HdWalletService.dogeP2pkhAddressFromMnemonic(
-            m,
-            testnet: false,
-          );
-          _dogeTestnetAddress = HdWalletService.dogeP2pkhAddressFromMnemonic(
-            m,
-            testnet: true,
-          );
-        } catch (e, st) {
-          debugPrint('DOGE derive failed: $e\n$st');
-          _dogeMainnetAddress = null;
-          _dogeTestnetAddress = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _tonAddressMain = await HdWalletService.tonFriendlyAddressFromMnemonic(
-            m,
-            testOnly: false,
-          );
-        } catch (e, st) {
-          debugPrint('TON main derive failed: $e\n$st');
-          _tonAddressMain = null;
-        }
-      }),
-      Future<void>(() async {
-        try {
-          _tonAddressTest = await HdWalletService.tonFriendlyAddressFromMnemonic(
-            m,
-            testOnly: true,
-          );
-        } catch (e, st) {
-          debugPrint('TON test derive failed: $e\n$st');
-          _tonAddressTest = null;
-        }
-      }),
-    ]);
+  Future<void> _applyDerivedKeysFromMnemonic(String m) async {
+    final result = await deriveWalletKeysInBackground(m);
+    _applyDerivedKeysResult(result);
   }
 
   /// 返回是否在派生完成前已用地址缓存发起余额刷新。
@@ -1288,8 +1244,12 @@ class WalletController extends ChangeNotifier {
           ? _wallets[idx].backedUp
           : await _storage.readBackedUpForWallet(id);
       unawaited(
-        _localCache?.putDerivedAddresses(id, _derivedAddressSnapshotFromState()),
+        _localCache?.putDerivedAddresses(
+          id,
+          _derivedAddressSnapshotFromState(),
+        ),
       );
+      notifyListeners();
     } catch (e, st) {
       debugPrint('Wallet init failed: $e\n$st');
       _credentials = null;
@@ -1958,26 +1918,12 @@ class WalletController extends ChangeNotifier {
   }
 
   static String? _readTxHashFromBroadcast(data) {
-    if (data == null) {
+    final raw = BtcBackendTransfer.parseBroadcastTxHash(data);
+    if (raw == null || raw.isEmpty) {
       return null;
     }
-    if (data is String) {
-      return data;
-    }
-    if (data is Map) {
-      final m = Map<String, dynamic>.from(data);
-      final keys = <String>['txHash', 'hash', 'transactionHash', 'txid'];
-      for (final k in keys) {
-        final v = m[k];
-        if (v is String && v.isNotEmpty) {
-          final t = WalletTransactionService.normalizeTxHashForApi(v);
-          if (t.isNotEmpty) {
-            return t;
-          }
-        }
-      }
-    }
-    return null;
+    final t = WalletTransactionService.normalizeTxHashForApi(raw);
+    return t.isEmpty ? null : t;
   }
 
   Future<String> _signBroadcastUtxoTransfer({
@@ -1986,6 +1932,7 @@ class WalletController extends ChangeNotifier {
     required String coin,
     required String toAddress,
     required num amount,
+    String? gasPriceType,
     required bool testnet,
     required String? ownerMainnet,
     required String? ownerTestnet,
@@ -2012,7 +1959,7 @@ class WalletController extends ChangeNotifier {
       ownerAddress: owner,
       toAddress: toAddress,
       amount: amount,
-      gasPriceType: null,
+      gasPriceType: gasPriceType,
       chainType: cfg.chainType,
     );
     if (create == null) {
@@ -2022,7 +1969,63 @@ class WalletController extends ChangeNotifier {
       final msg = create['message']?.toString() ?? 'createTransaction 失败';
       throw StateError(msg);
     }
-    final data = _asMap(create['data']);
+    var data = BtcBackendTransfer.normalizeCreateTransactionPayload(create['data']);
+    if (BtcBackendTransfer.needsInputFeeHint(data, doge: doge)) {
+      final est = await WalletEstimateGasService().estimateGasPreferV2(
+        chain: chain,
+        coin: coin,
+        ownerAddress: owner,
+        toAddress: toAddress,
+        amount: amount,
+        requireGasLimit: false,
+      );
+      double? fee = WalletEstimateGasService.parseNetworkFee(est);
+      if (fee == null) {
+        final txSize = WalletEstimateGasService.parseTxSize(est) ??
+            BtcBackendTransfer.parseTxVsizeFromDecoded(data);
+        if (txSize != null) {
+          final quote =
+              await WalletGasPriceService().fetchBtcFeeQuote(chain: chain);
+          fee = WalletEstimateGasService.computeUtxoFeeCoin(
+            txSize: txSize,
+            quote: quote ?? kBtcFeeQuoteFallbackSatPerVbyte,
+          );
+        }
+      }
+      if (fee != null) {
+        // 费率单位误判时 fee 会极小（如 1e-8），改走余额兜底。
+        if (doge && fee < 1e-6) {
+          fee = null;
+        } else {
+          data = {...data, 'fee': fee};
+          if (kDebugMode) {
+            debugPrint('$notReadyLabel createTransaction: 推断 fee=$fee');
+          }
+        }
+      }
+      if (fee == null &&
+          BtcBackendTransfer.needsInputFeeHint(data, doge: doge)) {
+        final bals = await _walletBalanceService.fetchBalances(
+          address: owner,
+          chain: chain,
+          coin: coin,
+        );
+        final bal = bals?.isNotEmpty == true ? bals!.first.balance : null;
+        if (bal != null && bal > 0) {
+          data = {...data, 'totalInput': bal};
+          if (kDebugMode) {
+            debugPrint('$notReadyLabel createTransaction: 用余额作 totalInput=$bal');
+          }
+        } else if (kDebugMode) {
+          debugPrint('$notReadyLabel createTransaction: 无法推断 fee（缺 txSize/费率）');
+        }
+      }
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '$notReadyLabel createTransaction.data keys: ${data.keys.join(", ")}',
+      );
+    }
     final path =
         testnet ? derivationPathTestnet : derivationPathMainnet;
     final pk = HdWalletService.btcEcprivateFromMnemonicPath(phrase, path);
@@ -2033,6 +2036,28 @@ class WalletController extends ChangeNotifier {
       testnet: testnet,
       doge: doge,
     );
+
+    if (doge && kDogeSkipBroadcastForBackendTest) {
+      final broadcastPayload = <String, dynamic>{
+        'chain': chain,
+        'coin': coin,
+        'data': signedHex,
+      };
+      debugPrint('');
+      debugPrint('======== $notReadyLabel [BackendTest] broadcastTransaction ========');
+      debugPrint('POST /api/app/wallet/broadcastTransaction');
+      debugPrint(const JsonEncoder.withIndent('  ').convert(broadcastPayload));
+      debugPrint(
+        '$notReadyLabel [BackendTest] data: ${signedHex.length} hex chars, '
+        '${signedHex.length ~/ 2} bytes',
+      );
+      debugPrint('======== 未调用广播接口（kDogeSkipBroadcastForBackendTest=true） ========');
+      debugPrint('');
+      throw StateError(
+        '$notReadyLabel 联调模式：已签名未广播，请将控制台 [BackendTest] 中的 JSON 发给后端',
+      );
+    }
+
     final broad = await _transferApi.broadcastTransaction(
       chain: chain,
       coin: coin,
@@ -2047,6 +2072,26 @@ class WalletController extends ChangeNotifier {
     }
     final h = _readTxHashFromBroadcast(broad['data']);
     return h ?? signedHex;
+  }
+
+  /// 波场能量租赁：preorder → 本地签名 → confirmOrder。
+  Future<TronResourceConfirmVo> rentTronEnergy(
+    TronResourcePreOrderDto dto,
+  ) async {
+    final pk = _tronPrivateKey;
+    if (pk == null || _tronAddress == null || _tronAddress!.isEmpty) {
+      throw StateError('Tron 钱包未初始化');
+    }
+    final pre = await _tronResourceService.preorder(dto);
+    final signData =
+        TronTransactionSigner.extractRawDataHex(pre.transaction) != null
+            ? pre.transaction
+            : <String, dynamic>{'transaction': pre.transaction};
+    final signed = TronTransactionSigner.signApiData(signData, pk);
+    return _tronResourceService.confirmOrder(
+      orderId: pre.orderId,
+      signedData: signed.signedJson,
+    );
   }
 
   /// 走后端 `createTransaction` + 本地 legacy 签名 + `broadcastTransaction` 广播；返回 `txHash`（若响应未提供则回退 raw）。
@@ -2198,15 +2243,15 @@ class WalletController extends ChangeNotifier {
       if (owner.isEmpty) {
         throw StateError('TON 地址未就绪');
       }
-      final create = await _transferApi.createTransaction(
-        chain: chain,
-        coin: coin,
-        ownerAddress: owner,
-        toAddress: toAddress,
-        amount: amount,
-        gasPriceType: null,
-        chainType: cfg.chainType,
-      );
+    final create = await _transferApi.createTransaction(
+      chain: chain,
+      coin: coin,
+      ownerAddress: owner,
+      toAddress: toAddress,
+      amount: amount,
+      gasPriceType: gasPriceType,
+      chainType: cfg.chainType,
+    );
       if (create == null) {
         throw StateError('createTransaction 无响应');
       }
@@ -2246,6 +2291,7 @@ class WalletController extends ChangeNotifier {
         coin: coin,
         toAddress: toAddress,
         amount: amount,
+        gasPriceType: gasPriceType,
         testnet: HdWalletService.btcTestnetHeuristic(cfg),
         ownerMainnet: _btcMainnetAddress,
         ownerTestnet: _btcTestnetAddress,
@@ -2263,6 +2309,7 @@ class WalletController extends ChangeNotifier {
         coin: coin,
         toAddress: toAddress,
         amount: amount,
+        gasPriceType: gasPriceType,
         testnet: HdWalletService.dogeTestnetHeuristic(cfg),
         ownerMainnet: _dogeMainnetAddress,
         ownerTestnet: _dogeTestnetAddress,
@@ -2299,40 +2346,11 @@ class WalletController extends ChangeNotifier {
         debugPrint('TRON createTransaction resp: $create');
       }
       final data = _asMap(create['data']);
-      final rawHex = (data['rawDataHex'] ??
-              data['raw_data_hex'] ??
-              (data['transaction'] is Map
-                  ? (data['transaction'] as Map)['raw_data_hex']
-                  : null))
-          ?.toString();
-      if (rawHex == null || rawHex.trim().isEmpty) {
-        throw StateError('TRON createTransaction 缺少 rawDataHex/raw_data_hex');
-      }
-      final rawBytes = tronHexToBytes(rawHex);
-      final digest = sha256.convert(rawBytes).bytes;
-      final sig = sign(Uint8List.fromList(digest), pk);
-      final sigBytes = Uint8List(65);
-      final rBytes = _uint256To32(sig.r);
-      final sBytes = _uint256To32(sig.s);
-      sigBytes.setRange(0, 32, rBytes);
-      sigBytes.setRange(32, 64, sBytes);
-      // web3dart 的 v 为 27/28（以太坊传统），Tron 期望 recoveryId 为 0/1。
-      final recId = sig.v >= 27 ? (sig.v - 27) : sig.v;
-      sigBytes[64] = recId;
-      final sigHex = bytesToHex(sigBytes, include0x: false);
-
-      Map<String, dynamic> txMap;
-      final tx = data['transaction'];
-      if (tx is Map) {
-        txMap = Map<String, dynamic>.from(tx);
-      } else {
-        txMap = Map<String, dynamic>.from(data);
-      }
-      txMap['signature'] = [sigHex];
+      final signed = TronTransactionSigner.signApiData(data, pk);
       final broad = await _transferApi.broadcastTransaction(
         chain: chain,
         coin: coin,
-        data: jsonEncode(txMap),
+        data: signed.signedJson,
       );
       if (kDebugMode) {
         debugPrint('TRON broadcastTransaction resp: $broad');
@@ -2345,7 +2363,7 @@ class WalletController extends ChangeNotifier {
         throw StateError(msg);
       }
       final h = _readTxHashFromBroadcast(broad['data']);
-      return h ?? (data['txId']?.toString() ?? sigHex);
+      return h ?? (data['txId']?.toString() ?? signed.signatureHex);
     }
 
     final create = await _transferApi.createTransaction(
@@ -2399,15 +2417,5 @@ class WalletController extends ChangeNotifier {
     }
     final h = _readTxHashFromBroadcast(broad['data']);
     return h ?? signed;
-  }
-
-  static Uint8List _uint256To32(BigInt v) {
-    final out = Uint8List(32);
-    var x = v;
-    for (var i = 31; i >= 0; i--) {
-      out[i] = (x & BigInt.from(0xff)).toInt();
-      x = x >> 8;
-    }
-    return out;
   }
 }

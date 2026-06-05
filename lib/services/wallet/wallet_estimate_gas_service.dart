@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../http/http_clients.dart';
 import '../market/app_price_service.dart' show kMarketApiBase;
+import 'wallet_gas_price_service.dart';
 
 /// 后端 `POST /api/app/wallet/estimateGas`：返回 `gasLimit` 等，用于不依赖链上 RPC 估算手续费。
 class WalletEstimateGasService {
@@ -218,5 +219,67 @@ class WalletEstimateGasService {
       }
     }
     return null;
+  }
+
+  /// UTXO 链：`estimateGas` / `estimateGasV2` 的 `data` 里常见手续费字段（主单位小数）。
+  static double? parseNetworkFee(Object? data) {
+    if (data == null) {
+      return null;
+    }
+    if (data is num) {
+      return data.toDouble();
+    }
+    if (data is Map) {
+      final m = Map<String, dynamic>.from(data);
+      for (final k in const [
+        'transactionFee',
+        'fee',
+        'networkFee',
+        'gasFee',
+        'minerFee',
+        'estimatedFee',
+      ]) {
+        final v = m[k];
+        if (v is num) {
+          return v.toDouble();
+        }
+        if (v is String) {
+          final p = double.tryParse(v.trim());
+          if (p != null) {
+            return p;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// UTXO 链手续费估算。
+  ///
+  /// - **BTC**：`gasPrice` 为 **sat/vB**（整数），`fee = ceil(txSize × sat/vB) / 1e8`。
+  /// - **DOGE 等**：`gasPrice` 为 **主单位/vB**（小数，如 `0.00017802`），`fee = txSize × rate`。
+  static double? computeUtxoFeeCoin({
+    required int txSize,
+    required WalletBtcFeeQuote quote,
+    String level = 'medium',
+  }) {
+    if (txSize <= 0) {
+      return null;
+    }
+    final rate = switch (level) {
+      'slow' || '低' => quote.slowSatPerVbyte,
+      'fast' || '高' => quote.fastSatPerVbyte,
+      _ => quote.mediumSatPerVbyte,
+    };
+    final rateD = double.tryParse(rate.toString());
+    if (rateD == null || rateD < 0) {
+      return null;
+    }
+    // sat/vB 通常为 ≥1 的整数；DOGE 网关返回主单位/vB 小数（如 0.00017802）。
+    if (rateD < 1.0) {
+      return txSize * rateD;
+    }
+    final feeSat = (txSize * rateD).ceil();
+    return feeSat / 1e8;
   }
 }

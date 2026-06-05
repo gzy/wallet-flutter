@@ -1850,10 +1850,7 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       );
                                       return;
                                     }
-                                    final gasPriceType = (execKind ==
-                                                ChainKind.tron ||
-                                            execKind == ChainKind.btc ||
-                                            execKind == ChainKind.doge ||
+                                    final gasPriceType = (execKind == ChainKind.tron ||
                                             execKind == ChainKind.ton)
                                         ? null
                                         : switch (_gasLevel) {

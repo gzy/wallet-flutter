@@ -205,32 +205,38 @@ class _CompactVisibilitySwitch extends StatelessWidget {
 
   static const Color _offTrack = Color(0xFF3A3A3E);
   static const Color _offThumb = Color(0xFFE4E4E7);
+  static const double _width = 44;
+  static const double _height = 26;
+  static const double _thumbSize = 22;
+  static const double _padding = 2;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 44,
-      height: 26,
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: Switch(
-          value: value,
-          onChanged: onChanged,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          splashRadius: 18,
-          trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
-          trackColor: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.selected)) {
-              return AppColors.accent;
-            }
-            return _offTrack;
-          }),
-          thumbColor: WidgetStateProperty.resolveWith((states) {
-            if (states.contains(WidgetState.selected)) {
-              return AppColors.textPrimary;
-            }
-            return _offThumb;
-          }),
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        width: _width,
+        height: _height,
+        padding: const EdgeInsets.all(_padding),
+        decoration: BoxDecoration(
+          color: value ? AppColors.accent : _offTrack,
+          borderRadius: BorderRadius.circular(_height / 2),
+        ),
+        child: AnimatedAlign(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          child: Container(
+            width: _thumbSize,
+            height: _thumbSize,
+            decoration: BoxDecoration(
+              color: value ? AppColors.textPrimary : _offThumb,
+              shape: BoxShape.circle,
+            ),
+          ),
         ),
       ),
     );
@@ -341,9 +347,12 @@ class _CoinManageTile extends StatelessWidget {
           if (showDragHandle)
             ReorderableDragStartListener(
               index: index,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 6),
-                child: _ReorderGrip(),
+              child: Container(
+                width: 36,
+                height: 36,
+                alignment: Alignment.center,
+                color: Colors.transparent,
+                child: const _ReorderGrip(),
               ),
             )
           else

@@ -13,6 +13,12 @@ import '../services/wallet/hd_wallet_service.dart';
 import '../services/wallet/wallet_transaction_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/coin_icon.dart';
+import '../widgets/backend_float/backend_float_controller.dart';
+import '../widgets/backend_float/backend_float_menu.dart';
+import '../widgets/backend_float/backend_float_overlay.dart';
+import '../services/backend_float/backend_float_settings_store.dart';
+import '../widgets/tron_energy_float_config.dart';
+import '../widgets/tron_energy_rental_panel.dart';
 import 'flash_screen.dart';
 import 'receive_screen.dart';
 import 'transfer_screen.dart';
@@ -343,6 +349,7 @@ class CoinDetailScreen extends StatefulWidget {
 
 class _CoinDetailScreenState extends State<CoinDetailScreen> {
   final WalletTransactionService _txDetailService = WalletTransactionService();
+  late final BackendFloatController _energyFloat;
 
   /// 非 `null` 表示已成功走过后端列表接口（含空列表）。
   List<ChainTransactionVo>? _txsFromApi;
@@ -360,9 +367,21 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
   @override
   void initState() {
     super.initState();
+    final wc = context.read<WalletController>();
+    _energyFloat = BackendFloatController(
+      moduleId: kTronEnergyFloatConfig.moduleId,
+      settingsStore: BackendFloatSettingsStore(wc.localCache),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_energyFloat.loadSettings());
       _loadTxs();
     });
+  }
+
+  @override
+  void dispose() {
+    _energyFloat.dispose();
+    super.dispose();
   }
 
   Future<void> _loadTxs() async {
@@ -672,7 +691,8 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
         ? const <ChainTransactionVo>[]
         : _visibleApiTransactions(_txsFromApi!, _txFilter, walletAddr, kind);
     final filterEmpty = useApiList ? visibleTxsApi.isEmpty : true;
-    return Scaffold(
+    final isTron = kind == ChainKind.tron;
+    final page = Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.background,
@@ -699,7 +719,9 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: Padding(
+      body: Stack(
+        children: [
+          Padding(
         padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -850,8 +872,11 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
                             Row(
                               children: [
                                 Expanded(
-                                  child: _quick(context, Icons.travel_explore,
-                                      'CoinGecko', () {}),
+                                  child: kind == ChainKind.tron
+                                      ? _quick(context, Icons.bolt, '租赁能量',
+                                          () => _energyFloat.openPanelDirectly())
+                                      : _quick(context, Icons.travel_explore,
+                                          'CoinGecko', () {}),
                                 ),
                                 Expanded(
                                   child: _quick(context, Icons.hexagon_outlined,
@@ -1384,6 +1409,35 @@ class _CoinDetailScreenState extends State<CoinDetailScreen> {
           ],
         ),
       ),
+        ],
+      ),
+    );
+    if (!isTron) {
+      return page;
+    }
+    return Stack(
+      children: [
+        page,
+        ListenableBuilder(
+          listenable: _energyFloat,
+          builder: (context, _) => BackendFloatOverlay(
+            controller: _energyFloat,
+            config: kTronEnergyFloatConfig,
+            expandedBuilder: (ctx) => TronEnergyRentalPanel(
+              chainQuery: wc.chainParamForCoin(live),
+              symbol: live.symbol,
+              networkLabel: live.network ?? live.symbol,
+              onMinimize: _energyFloat.collapsePanelToCircle,
+              onClose: _energyFloat.close,
+              onShowMoreMenu: () => BackendFloatMenu.show(
+                ctx,
+                controller: _energyFloat,
+                config: kTronEnergyFloatConfig,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

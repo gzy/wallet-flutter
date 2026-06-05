@@ -375,4 +375,33 @@ class AppLocalCache {
     }
     return out;
   }
+
+  // --- 后台模式浮窗开关（按模块 id 持久化） ---
+
+  static String backendFloatEnabledKey(String moduleId) =>
+      'backend_float_enabled__${moduleId.trim()}';
+
+  Future<void> putBackendFloatEnabled(String moduleId, bool enabled) async {
+    final id = moduleId.trim();
+    if (id.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db
+        .into(_db.cacheEntries)
+        .insertOnConflictUpdate(CacheEntriesCompanion(
+          key: Value(backendFloatEnabledKey(id)),
+          payload: Value(enabled ? '1' : '0'),
+          updatedAt: Value(now),
+        ));
+  }
+
+  /// `null` 表示从未保存过（调用方可用默认值，一般为启用浮窗）。
+  Future<bool?> getBackendFloatEnabled(String moduleId) async {
+    final id = moduleId.trim();
+    if (id.isEmpty) return null;
+    final r = await (_db.select(_db.cacheEntries)
+          ..where((e) => e.key.equals(backendFloatEnabledKey(id))))
+        .getSingleOrNull();
+    if (r == null) return null;
+    return r.payload == '1';
+  }
 }

@@ -11,7 +11,7 @@ import 'wallet_api_paths.dart';
 ///
 /// 统一到 **`/api/app/wallet/…`**：`POST` + JSON 体（`chain`、`coin`、…）。
 /// - **createTransaction**：`chain`、`coin`、`ownerAddress`、`toAddress`、`amount`、`gasPriceType`。
-///   **EVM**：`gasPriceType` 为 `slow`/`medium`/`fast`；**其它链**（含 TRON、BTC、SOL、XRP 等）：JSON 中 **`gasPriceType` 为 `null`**。
+///   **EVM / BTC / DOGE**：`gasPriceType` 为 `slow`/`medium`/`fast`；**其它链**（TRON、SOL、XRP 等）：JSON 中 **`gasPriceType` 为 `null`**。
 /// - **broadcastTransaction**：`chain`、`coin`、`data`。
 ///
 /// 返回：不强绑定结构，直接把后端 `data` 原样返回给调用方。
@@ -26,13 +26,16 @@ class WalletTransferApiService {
         logName: 'WalletTransfer', maxLogBodyLength: 20000);
   }
 
-  /// 是否采用调用方传入的 `gasPriceType` 字符串（非 EVM 时 JSON 体里仍为键 `gasPriceType: null`）。
-  static bool _evmUsesGasPriceTypeParam(String chain, String? chainType) {
+  /// 是否将 `gasPriceType`（slow/medium/fast）写入 JSON 体。
+  static bool _usesGasPriceTypeParam(String chain, String? chainType) {
     final fromType = ChainRules.kindFromChainType(chainType);
-    if (fromType != ChainKind.unknown) {
-      return fromType == ChainKind.evm;
-    }
-    return ChainRules.kindFromChainQuery(chain) == ChainKind.evm;
+    final kind = fromType != ChainKind.unknown
+        ? fromType
+        : ChainRules.kindFromChainQuery(chain);
+  return switch (kind) {
+      ChainKind.evm || ChainKind.btc || ChainKind.doge => true,
+      _ => false,
+    };
   }
 
   Future<Map<String, dynamic>?> createTransaction({
@@ -46,7 +49,7 @@ class WalletTransferApiService {
   }) async {
     try {
       final base = WalletApiPaths.createTransactionUri();
-      final String? gasPriceTypeJson = _evmUsesGasPriceTypeParam(chain, chainType)
+      final String? gasPriceTypeJson = _usesGasPriceTypeParam(chain, chainType)
           ? (gasPriceType != null && gasPriceType.trim().isNotEmpty
               ? gasPriceType.trim()
               : null)
