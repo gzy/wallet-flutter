@@ -42,15 +42,13 @@ class BackendFloatController extends ChangeNotifier {
   }
 
   /// 设置并持久化「本模块是否启用浮窗」。
+  ///
+  /// 启用浮窗不会自动展示小圆/长条；需全屏页点「−」收起为小圆后再点小圆展开长条。
   Future<void> setFloatEnabled(bool enabled) async {
     _floatDisabled = !enabled;
     await _settingsStore?.writeEnabled(moduleId, enabled);
     if (!enabled) {
       _phase = BackendFloatPhase.hidden;
-    } else if (_phase == BackendFloatPhase.expanded) {
-      _phase = BackendFloatPhase.edge;
-    } else if (_phase == BackendFloatPhase.hidden) {
-      _phase = BackendFloatPhase.edge;
     }
     notifyListeners();
   }
@@ -87,6 +85,7 @@ class BackendFloatController extends ChangeNotifier {
     }
   }
 
+  /// 全屏页「−」：浮窗开启时收起为可拖动小圆，否则直接关闭。
   void collapsePanelToCircle() {
     if (_floatDisabled) {
       close();

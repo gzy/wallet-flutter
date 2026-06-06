@@ -595,7 +595,8 @@ class _TronEnergyRentalPanelState extends State<TronEnergyRentalPanel> {
     if (fromApi != null && fromApi > 0) return fromApi;
     final e = tier.resourceValue;
     if (e <= 0) return 0;
-    return (e / _energyPerTxEstimate).ceil();
+    // 131k≈2 笔、65k≈1 笔；用 ceil 会把 131k 算成 3 笔。
+    return (e / _energyPerTxEstimate).round();
   }
 
   String _quickRentHint(TronResourcePriceTier? tier) {
@@ -907,7 +908,7 @@ class _TronEnergyRentalPanelState extends State<TronEnergyRentalPanel> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
-                  onPressed: widget.onMinimize,
+                  onPressed: widget.onClose,
                   icon: const Icon(Icons.arrow_back_ios_new, size: 18),
                   color: AppColors.textPrimary,
                 ),

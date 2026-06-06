@@ -1135,7 +1135,10 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
     return switch (ChainRules.kindForAppChain(chainCfg)) {
       ChainKind.tron => _TransferFeeUiKind.tron,
       ChainKind.btc || ChainKind.doge => _TransferFeeUiKind.btc,
-      ChainKind.solana || ChainKind.xrp || ChainKind.ton => _TransferFeeUiKind.dedicated,
+      ChainKind.solana ||
+      ChainKind.xrp ||
+      ChainKind.ton =>
+        _TransferFeeUiKind.dedicated,
       _ => _TransferFeeUiKind.evm,
     };
   }
@@ -1850,10 +1853,11 @@ class _TransferConfirmSheetState extends State<_TransferConfirmSheet> {
                                       );
                                       return;
                                     }
-                                    final gasPriceType = (execKind == ChainKind.tron ||
-                                            execKind == ChainKind.ton)
-                                        ? null
-                                        : switch (_gasLevel) {
+                                    final gasPriceType =
+                                        (execKind == ChainKind.tron ||
+                                                execKind == ChainKind.ton)
+                                            ? null
+                                            : switch (_gasLevel) {
                                                 '低' => 'slow',
                                                 '高' => 'fast',
                                                 _ => 'medium',
